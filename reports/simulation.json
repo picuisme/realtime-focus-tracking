@@ -1,0 +1,43 @@
+{
+  "note": "SIMULATED learners; see focus/simulator.py for every assumption.",
+  "users_test": 150,
+  "sessions_per_user": 6,
+  "policies": {
+    "never": {
+      "reward_per_decision": 0.19980105800967582,
+      "mean_return_s": 68.09201593078188,
+      "nudges_per_hour": 0.0,
+      "useful_nudge_rate": null,
+      "episodes": 4555
+    },
+    "rule_v21": {
+      "reward_per_decision": 0.3058750517170046,
+      "mean_return_s": 59.18517760713775,
+      "nudges_per_hour": 6.082666666666666,
+      "useful_nudge_rate": 0.49364313897413414,
+      "episodes": 4710
+    },
+    "linucb_population": {
+      "reward_per_decision": 0.38525615167406213,
+      "mean_return_s": 57.56410291522773,
+      "nudges_per_hour": 6.44,
+      "useful_nudge_rate": 0.5047619047619047,
+      "episodes": 4693
+    },
+    "linucb_personalised": {
+      "reward_per_decision": 0.35171903881700556,
+      "mean_return_s": 56.42705486666559,
+      "nudges_per_hour": 6.397333333333333,
+      "useful_nudge_rate": 0.5327219674864527,
+      "episodes": 4729
+    }
+  },
+  "ope_check": {
+    "target": "rule_v21",
+    "logged_decisions": 2705,
+    "true_value": 0.2581265700066588,
+    "ips": 0.27441131559913207,
+    "snips": 0.23902695134756738,
+    "doubly_robust": 0.24363178074771888
+  }
+}

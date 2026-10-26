@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Quyền riêng tư · Focus Tracker</title>
+<style>
+:root { --bg: #eef1f0; --fg: #16201e; --muted: #5d6b68; --accent: #0f7c74; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0e1413; --fg: #e3ecea; --muted: #8fa19d; --accent: #3cc2b5; color-scheme: dark; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 48px; }
+main { max-width: 68ch; margin-inline: auto; }
+h1 { font-size: 26px; } h2 { font-size: 18px; margin-top: 28px; }
+a { color: var(--accent); } li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Quyền riêng tư</h1>
+<p>Focus Tracker xử lý hình ảnh camera <strong>ngay trong trình duyệt của bạn</strong>. Không có máy chủ nào nhận hình ảnh, và trang không gửi dữ liệu đi đâu.</p>
+<h2>Những gì được xử lý</h2>
+<ul>
+  <li>Mỗi khung hình được đưa vào MediaPipe (chạy trong trình duyệt) để lấy 478 điểm mốc trên khuôn mặt, rồi bị bỏ đi.</li>
+  <li>Từ các điểm mốc, trang tính vài con số: góc đầu, độ mở mắt và miệng, hướng nhìn, có điện thoại hay không.</li>
+  <li>Chỉ các con số này được giữ trong bộ nhớ của trang trong lúc chạy.</li>
+</ul>
+<h2>Những gì được lưu</h2>
+<ul>
+  <li>Cài đặt, model nhắc nhở và bản tổng kết buổi được lưu trong bộ nhớ cục bộ của trình duyệt trên máy bạn. Xoá dữ liệu trang web trong trình duyệt là xoá hết.</li>
+  <li>Các file CSV/JSON chỉ được tạo khi bạn bấm nút tải. Chúng chứa số liệu, không chứa hình ảnh. Bạn quyết định có gửi cho ai hay không.</li>
+</ul>
+<h2>Kiểm tra</h2>
+<p>Mở công cụ nhà phát triển của trình duyệt, tab Network. Sau khi trang tải xong các mô hình (từ cdn.jsdelivr.net và storage.googleapis.com), bạn sẽ không thấy yêu cầu mạng nào khác khi đang chạy. Mã nguồn: <a href="https://github.com/picuisme/realtime-focus-tracking">github.com/picuisme/realtime-focus-tracking</a>.</p>
+<h2>Nghiên cứu</h2>
+<p>Nếu bạn tham gia nghiên cứu, nhóm sẽ xin đồng ý bằng văn bản trước. Bạn có thể rút lui và yêu cầu xoá dữ liệu đã gửi bất cứ lúc nào.</p>
+<p><a href="./">Quay lại Focus Tracker</a></p>
+</main>
+</body>
+</html>

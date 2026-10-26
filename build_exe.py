@@ -1,28 +1,27 @@
-import os
+"""Build the Windows desktop app with PyInstaller (one folder, no console)."""
+import shutil
 import subprocess
 import sys
-import shutil
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+DIST = ROOT / "dist" / "FocusTracker"
+
 
 def build():
-    print('Building FocusTracker GUI... (Directory mode)')
-    subprocess.check_call([sys.executable, '-m', 'PyInstaller', '-y', '--onedir', '--noconsole', '--name', 'FocusTracker', '--hidden-import', 'sklearn', '--collect-data', 'stable_baselines3', '--collect-data', 'mediapipe', 'gui_app.py'])
-    
-    print('Copying required model files and music to dist/FocusTracker/...')
-    files_to_copy = [
-        ('models/dqn_focus_agent_v2.1.zip', 'dqn_focus_agent_v2.1.zip'),
-        ('models/scaler_v2.1.pkl', 'scaler_v2.1.pkl'),
-        ('models/yolov8n.pt', 'yolov8n.pt'),
-        ('assets/focus_music.mp3', 'focus_music.mp3'),
-        ('models/face_landmarker.task', 'face_landmarker.task')
-    ]
-    for src, dst in files_to_copy:
-        if os.path.exists(src):
-            shutil.copy(src, os.path.join('dist', 'FocusTracker', dst))
-            print(f'Copied {src} to {dst}')
+    subprocess.check_call([sys.executable, "-m", "PyInstaller", "-y", "--onedir", "--noconsole", "--name", "FocusTracker",
+                           "--collect-data", "mediapipe", "--hidden-import", "focus", str(ROOT / "gui_app.py")])
+    copies = ["models/face_landmarker.task", "models/yolov8n.pt", "web/models/drowsiness.json", "web/models/nudge_prior.json"]
+    for rel in copies:
+        src, dst = ROOT / rel, DIST / "_internal" / rel
+        if src.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(src, dst)
+            print("copied", rel)
         else:
-            print(f'WARNING: Could not find {src}')
-            
-    print('Build complete! Check the dist/FocusTracker/ folder for FocusTracker.exe')
+            print("WARNING: missing", rel)
+    print("Done:", DIST / "FocusTracker.exe")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     build()

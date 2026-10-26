@@ -55,8 +55,8 @@ import mediapipe as mp  # noqa: E402
 from mediapipe.tasks import python as mp_python  # noqa: E402
 from mediapipe.tasks.python import vision  # noqa: E402
 
-from demo_webcam import (  # noqa: E402
-    calculate_brow_dist, calculate_ear, calculate_gaze_ratio, calculate_mar, estimate_head_pose,
+from focus.features import (  # noqa: E402
+    brow_dist, ear, gaze_ratio, mar, matrix_to_colmajor, pose_from_matrix, pose_pnp, to_4x3,
 )
 
 TARGET_FPS = 3.0
@@ -66,33 +66,11 @@ COLUMNS = [
     "brow_dist", "person_detected", "phone_count", "consecutive_frames", "is_distracted_label",
     "delta_yaw", "delta_pitch", "delta_ear", "gaze_ratio", "fatigue_score",
     "subject_id", "source", "gt_label",
+    "mp_pitch", "mp_yaw", "mp_roll",
 ]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
-
-def wrap_angle(a: float) -> float:
-    """Fold Euler angles into [-90, 90]. cv2.decomposeProjectionMatrix can return
-    values near ±180 for a frontal face, which put 27% of the original rows on the
-    wrong side of the scale."""
-    a = (a + 180.0) % 360.0 - 180.0
-    if a > 90.0:
-        a -= 180.0
-    elif a < -90.0:
-        a += 180.0
-    return a
-
-
-def to_4x3(lm, frame_shape):
-    """Remap normalised landmarks so ratios match a 640x480 webcam (the training setup).
-    MediaPipe normalises x by width and y by height, so on a 16:9 video EAR and MAR
-    would come out ~1.33x larger than on the webcam the model was trained with."""
-    h, w = frame_shape[:2]
-    k = (w / h) * 0.75
-    if abs(k - 1) < 1e-3:
-        return lm
-    return [SimpleNamespace(x=p.x * k, y=p.y, z=p.z) for p in lm]
-
 
 def rule_label(pitch, yaw, ear, phone, person, looking_down_frames) -> int:
     """Same rule as FocusAgentInference.process_frame, counted at 3 fps (30 s = 90 frames)."""
@@ -187,15 +165,17 @@ def process_video(path: Path, subject: str, gt: GtFn, source: str, detector, yol
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         res = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-        pitch = yaw = roll = ear = mar = brow = 0.0
+        pitch = yaw = roll = e = m = brow = 0.0
+        mp_pose = (0.0, 0.0, 0.0)
         gaze = 0.5
         person = 0
+        if res.face_landmarks and res.facial_transformation_matrixes:
+            mp_pose = pose_from_matrix(matrix_to_colmajor(res.facial_transformation_matrixes[0]))
         if res.face_landmarks:
-            lm = to_4x3(res.face_landmarks[0], frame.shape)
-            shape43 = (480, 640, 3)
-            pitch, yaw, roll = (wrap_angle(a) for a in estimate_head_pose(lm, shape43))
-            ear, mar = calculate_ear(lm), calculate_mar(lm)
-            brow, gaze = calculate_brow_dist(lm, shape43), calculate_gaze_ratio(lm)
+            lm = to_4x3(res.face_landmarks[0], frame.shape[1], frame.shape[0])
+            pitch, yaw, roll = pose_pnp(lm, 640, 480)
+            e, m = ear(lm), mar(lm)
+            brow, gaze = brow_dist(lm), gaze_ratio(lm)
             person = 1
 
         phone = 0
@@ -205,23 +185,24 @@ def process_video(path: Path, subject: str, gt: GtFn, source: str, detector, yol
             if not person and any(int(b.cls) == 0 and float(b.conf) > 0.5 for b in r.boxes):
                 person = 1
 
-        looking_down = looking_down + 1 if (pitch > 20 and abs(yaw) < 20 and ear >= 0.22) else 0
-        label = rule_label(pitch, yaw, ear, phone, person, looking_down)
+        looking_down = looking_down + 1 if (pitch > 20 and abs(yaw) < 20 and e >= 0.22) else 0
+        label = rule_label(pitch, yaw, e, phone, person, looking_down)
         consec = consec + 1 if label else 0
         elapsed_norm = min(1.0, t / 3600.0)
-        fatigue = min(1.0, elapsed_norm * (0.4 - min(ear, 0.4)) * 2.5)
+        fatigue = min(1.0, elapsed_norm * (0.4 - min(e, 0.4)) * 2.5)
 
         rows.append({
             "session_id": sid, "timestamp": round(t, 3),
             "head_pitch": round(pitch, 2), "head_yaw": round(yaw, 2), "head_roll": round(roll, 2),
-            "ear_score": round(ear, 4), "mar_score": round(mar, 4), "brow_dist": round(brow, 3),
+            "ear_score": round(e, 4), "mar_score": round(m, 4), "brow_dist": round(brow, 3),
             "person_detected": person, "phone_count": phone,
             "consecutive_frames": consec, "is_distracted_label": label,
             "delta_yaw": round(yaw - last["yaw"], 3), "delta_pitch": round(pitch - last["pitch"], 3),
-            "delta_ear": round(ear - last["ear"], 4), "gaze_ratio": gaze, "fatigue_score": fatigue,
+            "delta_ear": round(e - last["ear"], 4), "gaze_ratio": gaze, "fatigue_score": fatigue,
             "subject_id": subject, "source": source, "gt_label": gt(idx),
+            "mp_pitch": round(mp_pose[0], 2), "mp_yaw": round(mp_pose[1], 2), "mp_roll": round(mp_pose[2], 2),
         })
-        last = {"yaw": yaw, "pitch": pitch, "ear": ear}
+        last = {"yaw": yaw, "pitch": pitch, "ear": e}
     cap.release()
     face_rate = np.mean([r["ear_score"] > 0 for r in rows]) if rows else 0
     print(f"  {path.name}: {len(rows)} rows @ {TARGET_FPS:g} fps, face found {face_rate:.0%}")
@@ -240,7 +221,8 @@ def main() -> None:
     args = ap.parse_args()
 
     detector = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
-        base_options=mp_python.BaseOptions(model_asset_path=args.face_model), num_faces=1))
+        base_options=mp_python.BaseOptions(model_asset_path=args.face_model), num_faces=1,
+        output_facial_transformation_matrixes=True))
     yolo = None
     if args.phone:
         from ultralytics import YOLO
