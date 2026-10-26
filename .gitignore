@@ -6,3 +6,6 @@ build/
 # Python caches
 __pycache__/
 *.pyc
+
+# Release archives (multi-GB)
+/FocusTracker-*.zip

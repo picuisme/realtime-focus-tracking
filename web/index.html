@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Focus Tracker Web</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: camera stage left, instrument column right; stacks on phones. */
+:root {
+  --bg: #eef1f0; --panel: #ffffff; --line: #d5dcda; --fg: #16201e; --muted: #5d6b68;
+  --accent: #0f7c74; --good: #1f9d55; --warn: #c27c0e; --bad: #d12f2f; --mesh: rgba(15,124,116,.55);
+  --sans: "Be Vietnam Pro", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1413; --panel: #151d1c; --line: #26322f; --fg: #e3ecea; --muted: #8fa19d;
+  --accent: #3cc2b5; --good: #3ccf7a; --warn: #e7a73a; --bad: #ff5a5a; --mesh: rgba(60,194,181,.6); color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e1413; --panel: #151d1c; --line: #26322f; --fg: #e3ecea; --muted: #8fa19d;
+  --accent: #3cc2b5; --good: #3ccf7a; --warn: #e7a73a; --bad: #ff5a5a; --mesh: rgba(60,194,181,.6); color-scheme: dark; }
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 40px; }
+header, main, footer { max-width: 1180px; margin-inline: auto; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; justify-content: space-between; margin-bottom: 18px; }
+h1 { margin: 0; font-size: 26px; letter-spacing: -.01em; }
+h1 small { display: block; font-size: 13px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--panel); }
+.tabs button { border: 0; background: none; color: var(--muted); font: 500 14px var(--sans); padding: 7px 16px; border-radius: 999px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--bg); }
+main { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+
+.stage { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 4/3; max-width: 100%; }
+.stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.stage .empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 14px; text-align: center; color: #cfd8d6; padding: 24px; }
+.stage .empty p { margin: 0; max-width: 42ch; font-size: 14px; }
+body[data-alarm="1"] .stage { outline: 6px solid var(--bad); animation: pulse .6s infinite alternate; }
+@keyframes pulse { to { outline-color: transparent; } }
+@media (prefers-reduced-motion: reduce) { body[data-alarm="1"] .stage { animation: none; } }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.btn { font: 500 14px var(--sans); border-radius: 8px; padding: 9px 14px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+.btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+#status { font-size: 30px; font-weight: 700; line-height: 1.15; margin: 2px 0 4px; }
+#status[data-level="ok"] { color: var(--good); } #status[data-level="warn"] { color: var(--warn); } #status[data-level="alarm"] { color: var(--bad); }
+#reason { color: var(--muted); min-height: 1.5em; }
+.row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.big { font-size: 22px; font-weight: 600; }
+canvas#strip { width: 100%; height: 34px; display: block; margin-top: 10px; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px 14px; }
+.grid div span { display: block; }
+.qbars { display: grid; gap: 5px; margin-top: 8px; }
+.qbar { position: relative; font-size: 12.5px; padding: 3px 8px; display: flex; justify-content: space-between; border-radius: 4px; overflow: hidden; }
+.qbar::before { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w, 0%); background: var(--line); z-index: 0; transition: width .2s; }
+.qbar[data-best="1"]::before { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+.qbar > * { position: relative; z-index: 1; } .qbar b { font-family: var(--mono); font-weight: 400; }
+.pill { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--warn); color: var(--warn); margin-left: 6px; }
+.meter { height: 8px; border-radius: 4px; background: var(--line); position: relative; overflow: hidden; margin-top: 6px; }
+.meter::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w, 0%); background: linear-gradient(90deg, var(--good), var(--warn) 40%, var(--bad) 80%); }
+.settings { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.settings label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
+.settings label.check { flex-direction: row; align-items: center; gap: 8px; }
+input, select { font: 14px var(--sans); padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+body[data-mode="study"] .driver-only, body[data-mode="driver"] .study-only { display: none; }
+.note { font-size: 12.5px; color: var(--muted); }
+footer { margin-top: 22px; font-size: 12.5px; color: var(--muted); }
+footer p { max-width: 90ch; }
+
+#toasts { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 8px; z-index: 30; max-width: min(380px, calc(100vw - 32px)); }
+.toast { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); padding: 10px 14px; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.18); }
+.toast[data-kind="warn"] { border-left-color: var(--warn); } .toast[data-kind="ok"] { border-left-color: var(--good); }
+#dim { position: fixed; inset: 0; background: rgba(0,0,0,.45); pointer-events: none; z-index: 20; }
+#hardNudge { position: fixed; inset: 0; background: rgba(0,0,0,.92); color: #fff; z-index: 40; display: grid; place-content: center; text-align: center; gap: 18px; padding: 24px; }
+#hardNudge h2 { font-size: clamp(32px, 6vw, 56px); margin: 0; color: #ff5a5a; }
+#loading { position: absolute; inset: 0; display: grid; place-content: center; background: rgba(0,0,0,.6); color: #fff; font-size: 14px; }
+</style>
+</head>
+<body data-mode="study" data-alarm="0">
+<header>
+  <h1>Focus Tracker Web <small>Chạy hoàn toàn trong trình duyệt. Hình ảnh camera không rời khỏi máy bạn.</small></h1>
+  <div class="tabs" role="tablist">
+    <button data-tab="study" role="tab" aria-selected="true">Học tập · DQN</button>
+    <button data-tab="driver" role="tab" aria-selected="false">Lái xe · DMS</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="stage">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="empty" id="empty">
+        <p>Bấm <b>Bật camera</b> để bắt đầu. Lần đầu trang sẽ tải khoảng 10 MB mô hình MediaPipe.</p>
+      </div>
+      <div id="loading" hidden><span id="loadingText">Đang tải…</span></div>
+    </div>
+    <div class="controls">
+      <button class="btn primary" id="startBtn">Bật camera</button>
+      <button class="btn" id="stopBtn" hidden>Dừng</button>
+      <button class="btn" id="calibBtn" disabled>Hiệu chỉnh lại</button>
+      <button class="btn study-only" id="csvBtn">Tải CSV đặc trưng</button>
+    </div>
+    <p class="note" id="calibInfo">Khi bật camera, trang hiệu chỉnh 4 giây để lấy tư thế đầu trung tính và độ mở mắt của bạn (giúp người đeo kính).</p>
+  </section>
+
+  <section class="col">
+    <div class="card">
+      <div class="label">Trạng thái</div>
+      <div id="status" data-level="ok">Chưa chạy</div>
+      <div id="reason">–</div>
+      <div class="row" style="margin-top:8px"><span class="label" id="timerLabel">Thời gian mất tập trung</span><span class="num big" id="timer">0.0 s</span></div>
+      <canvas id="strip" aria-label="Lịch sử 60 giây gần nhất"></canvas>
+      <div class="row note"><span>60 giây trước</span><span>Thời gian phiên <span class="num" id="elapsed">00:00</span></span></div>
+    </div>
+
+    <div class="card study-only">
+      <div class="label">Tác tử DQN (33 → 256 → 256 → 6)</div>
+      <div class="row" style="margin-top:6px"><span>Đề xuất gốc của mạng</span><b id="rawAction">–</b></div>
+      <div class="row"><span>Hành động cuối sau luật an toàn <span class="pill" id="overridden" hidden>bị ghi đè</span></span><b id="finalAction">–</b></div>
+      <div class="qbars">
+        <div class="qbar" id="q0"><span>Do Nothing</span><b>–</b></div>
+        <div class="qbar" id="q1"><span>Gentle Visual Reminder</span><b>–</b></div>
+        <div class="qbar" id="q2"><span>Sound Alert</span><b>–</b></div>
+        <div class="qbar" id="q3"><span>Suggest Short Break</span><b>–</b></div>
+        <div class="qbar" id="q4"><span>Dim Screen</span><b>–</b></div>
+        <div class="qbar" id="q5"><span>Play Focus Music</span><b>–</b></div>
+      </div>
+      <div class="row note" style="margin-top:6px"><span>Q-value, chạy 3 lần/giây như lúc train</span><span>Fatigue <span class="num" id="fatigue">–</span></span></div>
+    </div>
+
+    <div class="card driver-only">
+      <div class="label">Giám sát tài xế</div>
+      <div class="row" style="margin-top:6px"><span>PERCLOS 60 s</span><span class="num" id="dPerclos">–</span></div>
+      <div class="meter" id="dPerclosBar"></div>
+      <div class="grid" style="margin-top:12px">
+        <div><span class="label">Nhắm mắt liên tục</span><span class="num big" id="dClosed">0.0 s</span></div>
+        <div><span class="label">Rời mắt khỏi đường</span><span class="num big" id="dOff">0.0 s</span></div>
+        <div><span class="label">Số lần ngáp / 5 phút</span><span class="num big" id="dYawn">0</span></div>
+      </div>
+      <p class="note">Báo động khi nhắm mắt &gt; 1.5 s, rời mắt &gt; 2 s, cầm điện thoại &gt; 1 s, hoặc PERCLOS &gt; 30%. Đây là bản demo, không phải thiết bị an toàn đã kiểm định.</p>
+    </div>
+
+    <div class="card">
+      <div class="label">Tín hiệu thô</div>
+      <div class="grid" style="margin-top:6px">
+        <div><span class="label">Pitch</span><span class="num" id="mPitch">–</span></div>
+        <div><span class="label">Yaw</span><span class="num" id="mYaw">–</span></div>
+        <div><span class="label">EAR</span><span class="num" id="mEar">–</span></div>
+        <div><span class="label">MAR</span><span class="num" id="mMar">–</span></div>
+        <div><span class="label">Gaze</span><span class="num" id="mGaze">–</span></div>
+        <div><span class="label">Điện thoại</span><span class="num" id="mPhone">–</span></div>
+      </div>
+    </div>
+
+    <details class="card">
+      <summary class="label" style="cursor:pointer">Cài đặt</summary>
+      <div class="settings" style="margin-top:10px">
+        <label>Tuổi <input id="age" type="number" min="16" max="80" value="21"></label>
+        <label>Nghề nghiệp
+          <select id="occupation"><option value="student">Sinh viên</option><option value="office">Văn phòng</option>
+            <option value="creative">Sáng tạo</option><option value="technical">Kỹ thuật</option><option value="other">Khác</option></select></label>
+        <label class="check"><input id="phoneToggle" type="checkbox" checked> Phát hiện điện thoại</label>
+        <label class="check"><input id="soundToggle" type="checkbox" checked> Âm thanh cảnh báo</label>
+        <label class="check"><input id="invertPitch" type="checkbox"> Đảo chiều pitch (nếu cúi đầu lại hiện số âm)</label>
+      </div>
+    </details>
+  </section>
+</main>
+
+<footer>
+  <p>Chế độ Học tập dùng đúng trọng số <code>dqn_focus_agent_v2.1</code> và scaler của repo, cùng các luật ghi đè của bản desktop, nhưng tính theo giây thay vì theo số frame. Chế độ Lái xe dùng luật xác định (PERCLOS, thời gian nhắm mắt, thời gian rời mắt) vì cảnh báo an toàn không nên phụ thuộc vào một chính sách RL.</p>
+</footer>
+
+<div id="toasts" aria-live="polite"></div>
+<div id="dim" hidden></div>
+<div id="hardNudge" hidden>
+  <h2>CẦN TẬP TRUNG</h2>
+  <p style="font-size:20px;margin:0">Bạn đã mất tập trung hơn 90 giây.</p>
+  <button class="btn primary" id="hardAck" style="justify-self:center;font-size:18px">Tôi sẽ tập trung lại</button>
+</div>
+
+<script type="module" src="./app.js"></script>
+<script>
+  // hide the placeholder as soon as the camera produces frames
+  document.getElementById('video').addEventListener('playing', () => { document.getElementById('empty').hidden = true; });
+</script>
+</body>
+</html>
