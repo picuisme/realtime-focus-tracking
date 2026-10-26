@@ -16,17 +16,21 @@ A real-time desktop app using computer vision and Reinforcement Learning (RL) to
 - **Note-Taking Mode:** Looking down with eyes open is treated as "Focused" for up to 30s.
 - **Built-in Music:** Integrated offline LoFi player.
 
+## Web demo
+
+A browser version with a Study mode (same DQN policy) and a Driver mode (drowsiness and distraction rules) lives in [`web/`](web/README.md). Everything runs on-device; camera frames never leave the browser.
+
 ## Usage
 
 1. Open `dist/FocusTracker/`.
 2. Run `FocusTracker.exe`.
-3. *(Optional)* Add a Gemini API key in `llm_agent.py` for dynamic AI messages.
+3. *(Optional)* Set the `GEMINI_API_KEY` environment variable (and optionally `GEMINI_MODEL`) for dynamic AI messages.
 4. Click 'X' to minimize to tray, or right-click the tray icon to quit.
 
 ## Structure
 
 - `gui_app.py`: UI & camera feed (Tkinter + OpenCV).
 - `focus_env.py`: RL environment & nudge rules.
-- `vision_utils.py`: Extracts head pose and eye metrics via Mediapipe.
+- `demo_webcam.py`: Head pose, EAR, MAR, brow and gaze features via MediaPipe (imported by the GUI).
 - `llm_agent.py`: Gemini LLM integration.
 - `build_exe.py`: PyInstaller build script.

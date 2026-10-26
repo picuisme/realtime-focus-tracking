@@ -3,8 +3,11 @@ import threading
 import queue
 
 class FocusLLMAgent:
-    def __init__(self, api_key="YOUR_API_KEY_HERE"):
-        self.api_key = api_key
+    def __init__(self, api_key=None, model=None):
+        # Read the key from the environment instead of hard-coding it in source.
+        # A placeholder string used to be truthy, so every call failed silently.
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
         self.client = None
         
         if self.api_key:
@@ -88,7 +91,7 @@ class FocusLLMAgent:
                 """
                 try:
                     response = self.client.models.generate_content(
-                        model="gemini-1.5-flash",
+                        model=self.model,
                         contents=prompt
                     )
                     self.current_message = response.text.strip().replace('"', '')

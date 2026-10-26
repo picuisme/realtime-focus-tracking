@@ -149,7 +149,7 @@ def processing_loop():
             
             metrics, dist_ratio, action_name = agent.process_frame(
                 pitch, yaw, roll, ear, mar, brow, person_detected, phone_count,
-                25, current_hour, "Student", gaze_ratio
+                25, current_hour, "student", gaze_ratio
             )
             
             if action_name == "Play Focus Music":
@@ -379,7 +379,6 @@ def on_closing():
         dialog.destroy()
         root.withdraw()
         start_tray()
-        notification.notify(title="Focus Tracker", message="App is running in the background.", timeout=3)
         
     def do_quit():
         global app_running
