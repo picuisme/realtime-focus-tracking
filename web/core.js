@@ -15,6 +15,14 @@ export const SCALER_MEAN  = [-7.623769, 0.14203, 1.92292, 0.24446, 0.032771, 21.
 export const SCALER_SCALE = [19.596203, 20.905710, 93.854901, 0.176328, 0.099095, 16.857744, 24.718392, 21.167936, 0.133483, 0.068432];
 
 // ── landmark metrics (same indices as demo_webcam.py) ─────────────────────
+// The model was trained on a 640x480 webcam. MediaPipe landmarks are normalised
+// per axis, so on a 16:9 camera EAR/MAR come out ~1.33x larger. to43() remaps x so
+// every ratio is computed as if the frame were 4:3; for a 4:3 frame it is a no-op.
+export function to43(lm, w, h) {
+  const k = (w / h) * 0.75;
+  if (Math.abs(k - 1) < 1e-3) return lm;
+  return lm.map(p => ({ x: p.x * k, y: p.y, z: p.z }));
+}
 const d2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 export function ear(lm) {
@@ -42,7 +50,7 @@ export function gazeRatio(lm) {
     const width = d2(lm[r], lm[l]);
     return width === 0 ? 0.5 : d2(lm[r], lm[iris]) / width;
   };
-  return (g(468, 362, 263) + g(473, 33, 133)) / 2;
+  return (g(468, 33, 133) + g(473, 362, 263)) / 2;   // iris paired with its own eye
 }
 
 // Head pose from MediaPipe's 4x4 facial transformation matrix (column-major).

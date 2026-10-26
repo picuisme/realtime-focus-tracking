@@ -121,8 +121,9 @@ function loop() {
   const lm = res.faceLandmarks?.[0];
   if (lm) {
     const pose = C.poseFromMatrix(res.facialTransformationMatrixes[0].data, settings.invertPitch);
-    m = { ...pose, ear: C.ear(lm), mar: C.mar(lm), brow: C.browDist(lm, video.videoWidth, video.videoHeight),
-      gaze: C.gazeRatio(lm), person: 1 };
+    const l43 = C.to43(lm, video.videoWidth, video.videoHeight);
+    m = { ...pose, ear: C.ear(l43), mar: C.mar(l43), brow: C.browDist(l43, 640, 480),
+      gaze: C.gazeRatio(l43), person: 1 };
     if (calib.active) calib.samples.push({ pitch: m.pitch, yaw: m.yaw, ear: m.ear });
     m.pitch -= calib.pitch0; m.yaw -= calib.yaw0;
   } else if (S.objPerson) m.person = 1;

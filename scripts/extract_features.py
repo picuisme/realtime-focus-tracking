@@ -41,6 +41,7 @@ import random
 import string
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Iterator, Optional
 
 import cv2
@@ -80,6 +81,17 @@ def wrap_angle(a: float) -> float:
     elif a < -90.0:
         a += 180.0
     return a
+
+
+def to_4x3(lm, frame_shape):
+    """Remap normalised landmarks so ratios match a 640x480 webcam (the training setup).
+    MediaPipe normalises x by width and y by height, so on a 16:9 video EAR and MAR
+    would come out ~1.33x larger than on the webcam the model was trained with."""
+    h, w = frame_shape[:2]
+    k = (w / h) * 0.75
+    if abs(k - 1) < 1e-3:
+        return lm
+    return [SimpleNamespace(x=p.x * k, y=p.y, z=p.z) for p in lm]
 
 
 def rule_label(pitch, yaw, ear, phone, person, looking_down_frames) -> int:
@@ -179,10 +191,11 @@ def process_video(path: Path, subject: str, gt: GtFn, source: str, detector, yol
         gaze = 0.5
         person = 0
         if res.face_landmarks:
-            lm = res.face_landmarks[0]
-            pitch, yaw, roll = (wrap_angle(a) for a in estimate_head_pose(lm, frame.shape))
+            lm = to_4x3(res.face_landmarks[0], frame.shape)
+            shape43 = (480, 640, 3)
+            pitch, yaw, roll = (wrap_angle(a) for a in estimate_head_pose(lm, shape43))
             ear, mar = calculate_ear(lm), calculate_mar(lm)
-            brow, gaze = calculate_brow_dist(lm, frame.shape), calculate_gaze_ratio(lm)
+            brow, gaze = calculate_brow_dist(lm, shape43), calculate_gaze_ratio(lm)
             person = 1
 
         phone = 0
