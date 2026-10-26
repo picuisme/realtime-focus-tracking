@@ -21,7 +21,7 @@ Camera chỉ hoạt động trên HTTPS hoặc `localhost`; mở trực tiếp f
 
 - `core.js`: port của `extract_window_features`, `encode_context`, scaler và mạng Q. Đã đối chiếu với Python: sai lệch đặc trưng < 3e-6, Q-value trùng khớp.
 - `policy.bin`: trọng số `q_net` (float32, 33→256→256→6) lấy từ `models/dqn_focus_agent_v2.1.zip`.
-- `app.js`: vòng lặp camera, hiệu chỉnh, hai chế độ, xuất CSV đặc trưng cùng schema với `data/focus_dataset.csv`.
+- `app.js`: vòng lặp camera, hiệu chỉnh, hai chế độ, xuất CSV đặc trưng cùng schema với `data/focus_dataset.csv` kèm nhãn tự báo (phím D) ở cột `gt_label`. Xem `data/DATASETS.md`.
 
 ## Khác với bản desktop
 

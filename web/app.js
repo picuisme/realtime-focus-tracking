@@ -172,7 +172,7 @@ function studyStep(m, dt, now) {
     };
     S.last = { yaw: m.yaw, pitch: m.pitch, ear: m.ear };
     S.window.push(C.scaleRow(row)); if (S.window.length > C.WINDOW_SIZE) S.window.shift();
-    S.log.push({ session_id: S.sessionId, timestamp: elapsed.toFixed(2), ...row });
+    S.log.push({ session_id: S.sessionId, timestamp: elapsed.toFixed(2), ...row, gt_label: S.selfLabel });
     if (S.log.length > 20000) S.log.shift();
     S.history.push(distracted); if (S.history.length > 180) S.history.shift();
 
@@ -358,8 +358,9 @@ document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click',
 function downloadCsv() {
   if (!S.log.length) { toast('Chưa có dữ liệu. Bật camera ở chế độ Học tập trước.', 'info'); return; }
   const cols = ['session_id','timestamp','head_pitch','head_yaw','head_roll','ear_score','mar_score','brow_dist','person_detected',
-    'phone_count','consecutive_frames','is_distracted_label','delta_yaw','delta_pitch','delta_ear','gaze_ratio','fatigue_score'];
-  const csv = [cols.join(','), ...S.log.map(r => cols.map(c => typeof r[c] === 'number' ? +r[c].toFixed(5) : r[c]).join(','))].join('\n');
+    'phone_count','consecutive_frames','is_distracted_label','delta_yaw','delta_pitch','delta_ear','gaze_ratio','fatigue_score',
+    'subject_id','source','gt_label'];
+  const csv = [cols.join(','), ...S.log.map(r => ({ ...r, subject_id: $('subject').value.trim() || 'anon', source: 'web' })).map(r => cols.map(c => typeof r[c] === 'number' ? +r[c].toFixed(5) : r[c]).join(','))].join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   a.download = `focus_features_${S.sessionId}.csv`; a.click();
@@ -370,5 +371,16 @@ $('startBtn').addEventListener('click', start);
 $('stopBtn').addEventListener('click', stop);
 $('calibBtn').addEventListener('click', startCalibration);
 $('csvBtn').addEventListener('click', downloadCsv);
+
+// Self-report: the user marks when they are actually distracted. This becomes gt_label,
+// the only label that does not come from the same rule the agent is rewarded on.
+S.selfLabel = 0;
+function toggleSelfLabel() {
+  S.selfLabel = S.selfLabel ? 0 : 1;
+  $('labelBtn').setAttribute('aria-pressed', String(!!S.selfLabel));
+  $('labelBtn').textContent = S.selfLabel ? 'Đang ghi: MẤT TẬP TRUNG (phím D)' : 'Ghi nhãn: tập trung (phím D)';
+}
+$('labelBtn').addEventListener('click', toggleSelfLabel);
+addEventListener('keydown', e => { if ((e.key === 'd' || e.key === 'D') && !/INPUT|SELECT/.test(e.target.tagName) && mode === 'study') toggleSelfLabel(); });
 setMode('study');
 if (!window.isSecureContext) toast('Camera chỉ chạy trên HTTPS hoặc localhost. Hãy mở qua GitHub Pages hoặc `python -m http.server`.', 'warn', 12000);

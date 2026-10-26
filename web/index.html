@@ -47,6 +47,7 @@ body[data-alarm="1"] .stage { outline: 6px solid var(--bad); animation: pulse .6
 .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .btn { font: 500 14px var(--sans); border-radius: 8px; padding: 9px 14px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
 .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.btn[aria-pressed="true"] { background: var(--bad); border-color: var(--bad); color: #fff; }
 .btn:disabled { opacity: .45; cursor: default; }
 .btn:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -111,6 +112,7 @@ footer p { max-width: 90ch; }
       <button class="btn primary" id="startBtn">Bật camera</button>
       <button class="btn" id="stopBtn" hidden>Dừng</button>
       <button class="btn" id="calibBtn" disabled>Hiệu chỉnh lại</button>
+      <button class="btn study-only" id="labelBtn" aria-pressed="false">Ghi nhãn: tập trung (phím D)</button>
       <button class="btn study-only" id="csvBtn">Tải CSV đặc trưng</button>
     </div>
     <p class="note" id="calibInfo">Khi bật camera, trang hiệu chỉnh 4 giây để lấy tư thế đầu trung tính và độ mở mắt của bạn (giúp người đeo kính).</p>
@@ -168,6 +170,7 @@ footer p { max-width: 90ch; }
     <details class="card">
       <summary class="label" style="cursor:pointer">Cài đặt</summary>
       <div class="settings" style="margin-top:10px">
+        <label>Mã người tham gia <input id="subject" type="text" placeholder="vd. p01"></label>
         <label>Tuổi <input id="age" type="number" min="16" max="80" value="21"></label>
         <label>Nghề nghiệp
           <select id="occupation"><option value="student">Sinh viên</option><option value="office">Văn phòng</option>
