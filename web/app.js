@@ -51,7 +51,7 @@ function startCalibration() {
 function finishCalibration() {
   calib.active = false;
   if (calib.samples.length < 10) { toast('Chưa thấy khuôn mặt rõ. Bấm Hiệu chỉnh lại khi đã ngồi đúng chỗ.', 'warn'); return; }
-  const med = k => { const a = calib.samples.map(s => s[k]).sort((x, y) => x - y); return a[a.length >> 1]; };
+  const med = k => C.median(calib.samples.map(s => s[k]));
   Object.assign(calib, { pitch: med('pitch'), yaw: med('yaw'), ear: med('ear'), done: true });
   $('calibInfo').textContent = `Đã hiệu chỉnh: mắt mở EAR ${calib.ear.toFixed(3)}, coi là nhắm khi dưới ${(calib.ear * C.CLOSED).toFixed(3)}.`;
   toast('Đã hiệu chỉnh.', 'ok');
@@ -63,22 +63,28 @@ let S;
 function newSession() {
   const now = performance.now();
   S = {
+    // settings are frozen for the session so a mid-session change cannot mix conditions or people
+    cfg: { condition: settings.condition, level: settings.level, participant: settings.participant || 'anon' },
     id: Math.random().toString(36).slice(2, 10), startedAt: new Date().toISOString(), t0: now, lastT: now, lastSampleT: 0,
     samples: [], log: [], decisions: [], timeline: [],
     distractedS: 0, focusedS: 0, lookDownS: 0, reasons: [], episodes: [], episodeStart: null,
     focusS: 0, awayS: 0, drowsy: null, drowsyHist: [],
     budget: new C.NudgeBudget({ perHour: LEVELS[settings.level].perHour }),
     nextDecisionAt: LEVELS[settings.level].firstS, pending: [], nudgeTimes: [],
+    nSamples: 0, backSince: null, lastReturnT: null, hiddenS: 0,
     selfLabel: 0, meeting: false, notes: false, phoneCount: 0, phoneBoxes: [], objPerson: 0, lastObjT: 0,
     // driver
     closedS: 0, offRoadS: 0, phoneS: 0, perclos: [], yawnOpenS: 0, yawns: [], lastAlarmT: 0, level: 'ok',
   };
   bandit = makeBandit();
+  ['meetingBtn', 'notesBtn', 'labelBtn'].forEach(id => $(id).setAttribute('aria-pressed', 'false'));
+  $('meetingBtn').textContent = 'Chế độ họp'; $('notesBtn').textContent = 'Chế độ ghi chép';
+  $('labelBtn').textContent = 'Tự báo mất tập trung (phím D)';
 }
 
 // ── nudge policy ──────────────────────────────────────────────────────────
 let bandit = null;
-function banditKey() { return `ft.bandit.${settings.participant || 'anon'}`; }
+function banditKey() { return `ft.bandit.${S?.cfg.participant ?? (settings.participant || 'anon')}`; }
 function makeBandit() {
   const saved = store.get(banditKey());
   if (saved) return C.LinUCB.fromJSON(saved);
@@ -91,8 +97,8 @@ $('resetBandit').addEventListener('click', () => {
 });
 
 function decide(x) {
-  if (settings.condition === 'A') return ['wait', 1];
-  if (settings.condition === 'B') return [C.ruleV21(S.distractedS), 1];
+  if (S.cfg.condition === 'A') return ['wait', 1];
+  if (S.cfg.condition === 'B') return [C.ruleV21(S.distractedS), 1];
   return bandit.act(x);
 }
 
@@ -106,7 +112,7 @@ function performNudge(action, decision) {
   if (action === 'wait') return;
   if (action === 'sound') beep(660, 0.25, 0.12);
   if (action === 'dim') { $('dim').hidden = false; setTimeout(() => { $('dim').hidden = true; }, 5000); }
-  toast(NUDGE_TEXT[action], action === 'break' ? 'info' : 'warn', 8000, () => { decision.notHelpful = true; toast('Đã ghi nhận. Cảm ơn bạn.', 'ok', 2000); });
+  toast(NUDGE_TEXT[action], action === 'break' ? 'info' : 'warn', 20000, () => { decision.notHelpful = true; toast('Đã ghi nhận. Cảm ơn bạn.', 'ok', 2000); });
 }
 
 function decisionPoint(now, elapsed) {
@@ -120,7 +126,7 @@ function decisionPoint(now, elapsed) {
   if (suppressed) why = S.meeting ? 'meeting' : 'notes';
   else if (capped) why = 'budget';
   else [action, p] = decide(x);
-  const d = { t: elapsed, x, action, p, why, condition: settings.condition, distractedS: S.distractedS, reasons, drowsy: S.drowsy, notHelpful: false, resolved: false };
+  const d = { t: elapsed, x, action, p, why, condition: S.cfg.condition, returnT: null, distractedS: S.distractedS, reasons, drowsy: S.drowsy, notHelpful: false, resolved: false };
   if (action !== 'wait') { S.budget.spend(elapsed); S.nudgeTimes.push(elapsed); }
   performNudge(action, d);
   S.pending.push(d);
@@ -128,31 +134,28 @@ function decisionPoint(now, elapsed) {
   renderPolicy(x);
 }
 
-function resolveDecisions(elapsed) {
-  for (const d of S.pending) {
-    if (d.resolved) continue;
-    const back = S.distractedS === 0;
-    if (back || elapsed - d.t >= 10) {
-      d.resolved = true; d.refocused = back && elapsed - d.t <= 10;
-      d.reward = C.reward(d.action, d.refocused, d.notHelpful);
-      if (d.why === 'policy' && settings.condition === 'C') { bandit.update(d.x, d.action, d.reward); saveBandit(); }
-      S.decisions.push(d);
-    }
+function resolveDecisions(elapsed, closed) {
+  for (const d of C.resolvePending(S.pending, elapsed, closed, S.lastReturnT)) {
+    if (d.why === 'policy' && d.condition === 'C') { bandit.update(d.x, d.action, d.reward); saveBandit(); }
+    S.decisions.push(d);
   }
   S.pending = S.pending.filter(d => !d.resolved);
 }
 
 // ── models ────────────────────────────────────────────────────────────────
+async function withFallback(make) {
+  try { return await make('GPU'); } catch (e) { console.warn('GPU delegate failed, using CPU', e); return make('CPU'); }
+}
 async function loadModels() {
   setLoading('Đang tải mô hình khuôn mặt…');
   const fileset = await FilesetResolver.forVisionTasks(WASM);
-  face = await FaceLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'GPU' }, runningMode: 'VIDEO', numFaces: 1, outputFacialTransformationMatrixes: true,
-  });
+  face = await withFallback(delegate => FaceLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: FACE_MODEL, delegate }, runningMode: 'VIDEO', numFaces: 1, outputFacialTransformationMatrixes: true,
+  }));
   setLoading('Đang tải bộ phát hiện điện thoại…');
-  objects = await ObjectDetector.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: OBJ_MODEL, delegate: 'GPU' }, runningMode: 'VIDEO', scoreThreshold: 0.45, maxResults: 5,
-  });
+  objects = await withFallback(delegate => ObjectDetector.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: OBJ_MODEL, delegate }, runningMode: 'VIDEO', scoreThreshold: 0.45, maxResults: 5,
+  }));
 }
 async function loadPolicies() {
   try { drowsyModel = await (await fetch('./models/drowsiness.json')).json(); } catch { drowsyModel = null; }
@@ -165,6 +168,7 @@ async function loadPolicies() {
 async function start() {
   try {
     $('startBtn').disabled = true;
+    try { audio ??= new AudioContext(); audio.resume?.(); } catch { audio = null; }   // must happen in the click (Safari)
     if (!face) await loadModels();
     setLoading('Đang xin quyền camera…');
     stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: settings.camera }, audio: false });
@@ -173,18 +177,23 @@ async function start() {
     overlay.width = video.videoWidth; overlay.height = video.videoHeight;
     setLoading(null);
     $('startBtn').hidden = true; $('stopBtn').hidden = false; $('calibBtn').disabled = false; $('summary').hidden = true;
-    newSession(); running = true;
+    newSession(); running = true; lockSettings(true);
     if (mode === 'driver') requestWakeLock();
     startCalibration();
-    requestAnimationFrame(loop);
+    schedule();
   } catch (e) {
     setLoading(null); $('startBtn').disabled = false;
     toast(e.name === 'NotAllowedError' ? 'Trình duyệt đang chặn camera. Cho phép camera cho trang này rồi thử lại.'
       : `Không khởi động được: ${e.message}`, 'warn', 8000);
   }
 }
+const LOCKED = ['participant', 'condition', 'level', 'cameraSel', 'resetBandit'];
+function lockSettings(on) {
+  LOCKED.forEach(id => { $(id).disabled = on; });
+  $('lockNote').hidden = !on;
+}
 function stop() {
-  running = false;
+  running = false; lockSettings(false);
   stream?.getTracks().forEach(t => t.stop());
   wakeLock?.release?.(); wakeLock = null;
   $('startBtn').hidden = false; $('startBtn').disabled = false; $('stopBtn').hidden = true; $('calibBtn').disabled = true;
@@ -224,18 +233,26 @@ function loop() {
     S.lastSampleT = now;
     S.samples.push({ ear_score: m.ear, mar_score: m.mar, head_pitch: m.pitch, head_yaw: m.yaw, gaze_ratio: m.gaze });
     if (S.samples.length > 600) S.samples.shift();
-    if (S.samples.length >= 30 && S.samples.length % 3 === 0) {
-      const ref = S.samples.length >= C.REF_SAMPLES ? (S.ref ??= C.reference(S.samples)) : { ear: calib.ear, pitch: calib.pitch, yaw: calib.yaw };
+    S.nSamples++;
+    if (S.nSamples >= 30 && S.nSamples % 3 === 0) {
+      const ref = S.nSamples >= C.REF_SAMPLES ? (S.ref ??= C.reference(S.samples)) : { ear: calib.ear, pitch: calib.pitch, yaw: calib.yaw };
       S.features = C.windowFeatures(S.samples, ref);
       S.drowsy = drowsyModel ? C.drowsiness(drowsyModel, S.features) : null;
       if (S.drowsy != null) S.drowsyHist.push(S.drowsy);
     }
   }
 
+  if (document.hidden) S.hiddenS += dt;
   drawOverlay(lm);
   if (mode === 'study') studyStep(m, dt, elapsed); else driverStep(m, dt, now);
-  requestAnimationFrame(loop);
+  schedule();
 }
+// requestAnimationFrame stops in a hidden tab; fall back to a timer so tracking continues
+// (browsers slow hidden timers to about once a second, which the summary reports).
+function schedule() { if (document.hidden) setTimeout(loop, 250); else requestAnimationFrame(loop); }
+document.addEventListener('visibilitychange', () => {
+  if (running && !document.hidden && S?.hiddenS > 5) toast('Khi tab này bị ẩn, trình duyệt làm chậm việc theo dõi. Để tab hiển thị (ví dụ đặt cạnh cửa sổ khác) hoặc dùng app desktop.', 'info', 9000);
+});
 
 // ── study mode ────────────────────────────────────────────────────────────
 function studyReasons(m) {
@@ -261,21 +278,12 @@ function studyStep(m, dt, elapsed) {
   const away = S.reasons.length > 0;
 
   // hysteresis: the longer the distraction, the longer focus must hold before it counts as over
-  if (away) {
-    if (S.distractedS === 0) S.episodeStart = elapsed;
-    S.distractedS += dt; S.focusedS = 0;
-  } else if (S.distractedS > 0) {
-    S.focusedS += dt;
-    const need = S.distractedS >= 9 ? 4.5 : S.distractedS >= 3 ? 1.5 : 0.5;
-    if (S.focusedS >= need) {
-      if (S.distractedS >= 5) S.episodes.push({ start: S.episodeStart, dur: S.distractedS });
-      S.distractedS = 0; S.focusedS = 0; S.nextDecisionAt = LEVELS[settings.level].firstS;
-    }
-  }
+  const closed = C.episodeStep(S, away, dt, elapsed);
+  if (closed) S.nextDecisionAt = LEVELS[S.cfg.level].firstS;
   if (S.distractedS > 0) S.awayS += dt; else S.focusS += dt;
 
   if (S.distractedS >= S.nextDecisionAt) { decisionPoint(performance.now(), elapsed); S.nextDecisionAt += 15; }
-  resolveDecisions(elapsed);
+  resolveDecisions(elapsed, closed);
 
   if (S.timeline.length === 0 || elapsed - S.timeline.at(-1).t >= 1) {
     S.timeline.push({ t: elapsed, away: S.distractedS > 0 ? 1 : 0, nudge: S.lastDecision && S.lastDecision.t > elapsed - 1 && S.lastDecision.action !== 'wait' ? 1 : 0 });
@@ -373,7 +381,7 @@ function renderPolicy(x) {
   const d = S.lastDecision;
   $('lastAction').textContent = d ? `${ACTION_TEXT[d.action]}${d.why !== 'policy' ? ` (bỏ qua: ${{ meeting: 'đang họp', notes: 'đang ghi chép', budget: 'đã nhắc đủ' }[d.why]})` : ''}` : '–';
   $('lastProb').textContent = d && d.why === 'policy' ? `${Math.round(d.p * 100)}%` : '–';
-  const show = settings.condition === 'C';
+  const show = S.cfg.condition === 'C';
   $('qbars').hidden = !show;
   if (!show) return;
   const sc = bandit.scores(x, false), vals = Object.values(sc), max = Math.max(...vals), min = Math.min(...vals);
@@ -418,12 +426,13 @@ function summary() {
   const eps = [...S.episodes, ...(S.distractedS >= 5 ? [{ start: S.episodeStart, dur: S.distractedS }] : [])];
   const nudges = S.decisions.filter(d => d.action !== 'wait');
   return {
-    session_id: S.id, participant: settings.participant || 'anon', condition: settings.condition, level: settings.level,
+    session_id: S.id, participant: S.cfg.participant, condition: S.cfg.condition, level: S.cfg.level,
     started_at: S.startedAt, minutes: +(total / 60).toFixed(2), focused_minutes: +(S.focusS / 60).toFixed(2),
     distraction_episodes: eps.length, mean_return_s: eps.length ? +(eps.reduce((s, e) => s + e.dur, 0) / eps.length).toFixed(1) : null,
     nudges: nudges.length, nudges_per_hour: total > 0 ? +(nudges.length / total * 3600).toFixed(1) : 0,
     useful_nudge_rate: nudges.length ? +(nudges.filter(d => d.refocused).length / nudges.length).toFixed(3) : null,
     not_helpful: nudges.filter(d => d.notHelpful).length,
+    hidden_minutes: +(S.hiddenS / 60).toFixed(2),
     mean_drowsiness: S.drowsyHist.length ? +(S.drowsyHist.reduce((a, b) => a + b, 0) / S.drowsyHist.length).toFixed(3) : null,
     self_rated_focus: $('qFocus').value ? Number($('qFocus').value) : null,
     self_rated_annoyance: $('qAnnoy').value ? Number($('qAnnoy').value) : null,
@@ -447,14 +456,17 @@ function download(name, text, type = 'text/csv') {
   a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
-const csv = (cols, rows) => [cols.join(','), ...rows.map(r => cols.map(c => {
-  const v = r[c]; return typeof v === 'number' ? +v.toFixed(5) : Array.isArray(v) ? `"${v.join(' ')}"` : (v ?? '');
-}).join(','))].join('\n');
-const pid = () => settings.participant || 'anon';
+const cell = v => {
+  if (typeof v === 'number') return String(+v.toFixed(5));
+  const t = Array.isArray(v) ? v.map(x => (typeof x === 'number' ? +x.toFixed(6) : x)).join(' ') : String(v ?? '');
+  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+};
+const csv = (cols, rows) => [cols.join(','), ...rows.map(r => cols.map(c => cell(r[c])).join(','))].join('\n');
+const pid = () => S?.cfg.participant ?? (settings.participant || 'anon');
 
 $('dlFeatures').addEventListener('click', () => {
   if (!S?.log.length) return toast('Chưa có dữ liệu.', 'info');
-  const rows = S.log.map(r => ({ ...r, subject_id: pid(), source: 'web', condition: settings.condition }));
+  const rows = S.log.map(r => ({ ...r, subject_id: pid(), source: 'web', condition: S.cfg.condition }));
   download(`features_${pid()}_${S.id}.csv`, csv(['session_id', 'timestamp', 'head_pitch', 'head_yaw', 'head_roll', 'ear_score', 'mar_score',
     'brow_dist', 'gaze_ratio', 'person_detected', 'phone_count', 'is_distracted_label', 'distracted_s', 'drowsy', 'meeting', 'notes',
     'gt_label', 'subject_id', 'source', 'condition'], rows));
@@ -481,8 +493,8 @@ $('saveQ').addEventListener('click', () => {
 // ── small utilities ───────────────────────────────────────────────────────
 let audio, wakeLock = null;
 function beep(freq, dur, gain = 0.15) {
-  if (!settings.sound) return;
-  audio ??= new AudioContext();
+  if (!settings.sound || !audio) return;
+  if (audio.state === 'suspended') audio.resume?.();
   const o = audio.createOscillator(), g = audio.createGain();
   o.frequency.value = freq; g.gain.value = gain; o.connect(g).connect(audio.destination);
   o.start(); o.stop(audio.currentTime + dur);
@@ -494,6 +506,8 @@ function toast(text, kind = 'info', ms = 4000, onNotHelpful = null) {
   if (onNotHelpful) {
     const b = document.createElement('button'); b.className = 'linkbtn'; b.textContent = 'Không hữu ích';
     b.addEventListener('click', () => { onNotHelpful(); el.remove(); }); el.append(b);
+    const x = document.createElement('button'); x.className = 'linkbtn'; x.textContent = 'Đóng';
+    x.addEventListener('click', () => el.remove()); el.append(x);
   }
   $('toasts').append(el); setTimeout(() => el.remove(), ms);
 }

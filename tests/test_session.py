@@ -65,3 +65,41 @@ def test_budget_caps_nudges():
         run(s, AWAY, 25)
         run(s, FOCUS, 6)
     assert s.summary()["nudges"] <= 2 + 4 * s.t / 3600 + 1e-9
+
+
+def test_return_7s_after_a_nudge_counts_as_refocused():
+    """Regression: the 4.5 s hysteresis hold must not be charged to the nudge."""
+    s = StudySession(condition="B")
+    run(s, FOCUS, 5)
+    run(s, AWAY, 20.05)          # decisions at 5 s (wait) and 20 s (toast)
+    run(s, AWAY, 7)              # back 7 s after the toast
+    run(s, FOCUS, 10)
+    toast = [d for d in s.decisions if d.action == "toast"][0]
+    assert toast.refocused and abs(toast.return_t - toast.t - 7) < 0.3
+
+
+def test_return_after_12s_is_not_refocused():
+    s = StudySession(condition="B")
+    run(s, FOCUS, 5)
+    run(s, AWAY, 20.05 + 12)
+    run(s, FOCUS, 10)
+    toast = [d for d in s.decisions if d.action == "toast"][0]
+    assert not toast.refocused
+
+
+def test_not_helpful_after_returning_still_counts():
+    s = StudySession(condition="B")
+    run(s, FOCUS, 5)
+    d = run(s, AWAY, 20.05)[-1]
+    assert d.action == "toast"
+    run(s, FOCUS, 3)             # back quickly...
+    d.not_helpful = True         # ...then presses "not helpful" while the toast is still open
+    run(s, FOCUS, 10)
+    assert d.resolved and d.refocused and abs(d.reward - (1 - 0.1 - 0.5)) < 1e-9
+
+
+def test_drowsiness_is_scored_every_third_sample_even_after_the_buffer_fills():
+    s = StudySession(condition="A", drowsy_model={"coef": [0.0] * 13, "intercept": 0.0, "mean": [0.0] * 13, "scale": [1.0] * 13})
+    run(s, FOCUS, 400)
+    expected = len([k for k in range(30, s.n_samples + 1) if k % 3 == 0])
+    assert s.n_samples > 600 and len(s.drowsy_hist) == expected

@@ -135,8 +135,8 @@ def rule_v21(x, info):
 
 
 def rule_v21_probs(x) -> dict:
-    """rule_v21 as a target policy for off-policy evaluation (elapsed is x[1] * 60)."""
-    e = x[1] * 60
+    """rule_v21 as a target policy for off-policy evaluation (elapsed is x[1] * 180)."""
+    e = x[1] * 180
     a = "sound" if e >= 90 else "toast" if e >= 9 else "wait"
     return {a: 1.0}
 

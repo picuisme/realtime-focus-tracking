@@ -25,7 +25,7 @@ import numpy as np
 ACTIONS = ["wait", "toast", "sound", "break", "dim"]
 COST = {"wait": 0.0, "toast": 0.10, "sound": 0.30, "break": 0.15, "dim": 0.20}
 REASONS = ["phone", "head_turned", "eyes_closed", "absent"]
-CONTEXT = ["bias", "distracted_min", "drowsy", "since_nudge", "nudges_10min", "session_h",
+CONTEXT = ["bias", "distracted_3min", "drowsy", "since_nudge", "nudges_10min", "session_h",
            "hour_sin", "hour_cos"] + [f"r_{r}" for r in REASONS]
 D = len(CONTEXT)
 
@@ -33,7 +33,7 @@ D = len(CONTEXT)
 def context(distracted_s: float, drowsy: float, since_nudge_s: float, nudges_10min: int,
             session_s: float, hour: float, reasons: Sequence[str]) -> np.ndarray:
     a = 2 * math.pi * hour / 24
-    x = [1.0, min(distracted_s / 60, 1.0), float(drowsy), min(since_nudge_s / 600, 1.0),
+    x = [1.0, min(distracted_s / 180, 1.0), float(drowsy), min(since_nudge_s / 600, 1.0),
          min(nudges_10min / 6, 1.0), min(session_s / 7200, 1.0), math.sin(a), math.cos(a)]
     x += [1.0 if r in reasons else 0.0 for r in REASONS]
     return np.asarray(x, dtype=np.float64)

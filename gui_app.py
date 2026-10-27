@@ -13,6 +13,8 @@ import argparse
 import csv
 import datetime as dt
 import json
+import os
+import queue
 import sys
 import threading
 import time
@@ -78,10 +80,11 @@ class Vision:
 # ── persistence ──────────────────────────────────────────────────────────
 def load_bandit(participant: str) -> LinUCB:
     saved = HOME / f"bandit_{participant or 'anon'}.json"
+    seed = int.from_bytes(os.urandom(4), "little")     # fresh exploration each session (OPE needs it)
     for p in (saved, NUDGE_PRIOR):
         if p.exists():
-            return LinUCB.from_json(p.read_text())
-    return LinUCB()
+            return LinUCB.from_json(p.read_text(), seed=seed)
+    return LinUCB(seed=seed)
 
 
 def save_session(sess: StudySession, participant: str, extra: dict | None = None) -> Path:
@@ -146,11 +149,13 @@ def gui(args) -> None:
     style = ttk.Style(root)
     style.theme_use("clam")
 
-    state = {"frame": None, "f": None, "phone": 0, "running": True, "err": None}
+    state = {"frame": None, "f": None, "phone": 0, "running": True, "err": None, "closing": False}
     sess = make_session(args)
     lock = threading.Lock()
+    events: queue.Queue = queue.Queue()    # worker -> Tk thread; Tk is only touched from the main thread
 
     def worker():
+        cap = vis = None
         try:
             vis = Vision(phone=not args.no_phone)
             cap = cv2.VideoCapture(args.camera)
@@ -168,12 +173,16 @@ def gui(args) -> None:
                     made = sess.step(min(0.5, now - last), f, phone=phone)
                 last = now
                 for d in made:
-                    root.after(0, perform, d)
+                    events.put(d)
                 state.update(frame=frame, f=f, phone=phone, err=None)
                 time.sleep(max(0.0, 1 / 15 - (time.time() - now)))
-            cap.release()
         except Exception as e:  # show the error in the window instead of dying silently
             state["err"] = f"{type(e).__name__}: {e}"
+        finally:
+            if cap is not None:
+                cap.release()
+            if vis is not None:
+                vis.face.close()
 
     # layout
     left = tk.Frame(root, bg="#1c2625", padx=18, pady=18)
@@ -204,8 +213,11 @@ def gui(args) -> None:
         b = tk.Button(left, text=f"Chế độ {label}", bg="#2a3634", fg="white", relief="flat", padx=10, pady=6)
         b.config(command=lambda a=attr, bt=b, lb=label: toggle(a, bt, lb))
         b.pack(anchor="w", fill="x", pady=3)
+    def recalibrate():
+        with lock:
+            sess.recalibrate()
     tk.Button(left, text="Hiệu chỉnh lại", bg="#2a3634", fg="white", relief="flat", padx=10, pady=6,
-              command=lambda: sess.recalibrate()).pack(anchor="w", fill="x", pady=3)
+              command=recalibrate).pack(anchor="w", fill="x", pady=3)
     video = tk.Label(right, bg="#151d1c")
     video.pack(expand=True)
 
@@ -240,14 +252,17 @@ def gui(args) -> None:
         tk.Label(t, text=text, wraplength=390, bg="#b36f05", fg="black", font=("Segoe UI", 11, "bold")).pack(expand=True, padx=12, pady=(10, 0))
 
         def not_helpful():
-            d.not_helpful = True
+            with lock:
+                d.not_helpful = True
             t.destroy()
         tk.Button(t, text="Không hữu ích", command=not_helpful, relief="flat").pack(pady=(0, 8))
-        root.after(8000, lambda: t.winfo_exists() and t.destroy())
+        root.after(20000, lambda: t.winfo_exists() and t.destroy())
 
     def refresh():
         if not state["running"]:
             return
+        while not events.empty():
+            perform(events.get_nowait())
         with lock:
             s = sess.distracted_s
             reasons = list(sess.reasons)
@@ -279,7 +294,11 @@ def gui(args) -> None:
         root.after(100, refresh)
 
     def on_close():
+        if state["closing"]:
+            return
+        state["closing"] = True
         state["running"] = False
+        worker_thread.join(timeout=3)
         with lock:
             path = save_session(sess, args.participant)
             summ = sess.summary()
@@ -296,7 +315,8 @@ def gui(args) -> None:
         w.protocol("WM_DELETE_WINDOW", root.destroy)
 
     root.protocol("WM_DELETE_WINDOW", on_close)
-    threading.Thread(target=worker, daemon=True).start()
+    worker_thread = threading.Thread(target=worker, daemon=True)
+    worker_thread.start()
     root.after(100, refresh)
     root.mainloop()
 

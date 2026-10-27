@@ -58,7 +58,7 @@ export const FEATURES = ['ear_rel_mean20', 'ear_rel_std20', 'perclos60', 'closur
   'mar_mean60', 'yawn_frac60', 'pitch_rel_mean20', 'pitch_std20', 'yaw_std20', 'abs_yaw_rel_mean20', 'gaze_std20',
   'face_missing60'];
 
-const median = a => { const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
+export const median = a => { const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
 const mean = a => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
 const std = a => { if (!a.length) return 0; const m = mean(a); return Math.sqrt(mean(a.map(v => (v - m) ** 2))); };
 
@@ -104,7 +104,7 @@ export const D = 8 + REASONS.length;
 
 export function context(distractedS, drowsy, sinceNudgeS, nudges10min, sessionS, hour, reasons) {
   const a = 2 * Math.PI * hour / 24;
-  return [1, Math.min(distractedS / 60, 1), drowsy, Math.min(sinceNudgeS / 600, 1), Math.min(nudges10min / 6, 1),
+  return [1, Math.min(distractedS / 180, 1), drowsy, Math.min(sinceNudgeS / 600, 1), Math.min(nudges10min / 6, 1),
     Math.min(sessionS / 7200, 1), Math.sin(a), Math.cos(a), ...REASONS.map(r => (reasons.includes(r) ? 1 : 0))];
 }
 
@@ -167,3 +167,44 @@ export const ruleV21 = distractedS => (distractedS >= 90 ? 'sound' : distractedS
 
 // ── driver alarms (focus/rules.py DriverRules) ───────────────────────────
 export const DRIVER = { microsleepS: 1.5, offRoadS: 2, phoneS: 1, perclosWarn: 0.15, perclosAlarm: 0.3, yawnWarnCount: 3, drowsyWarn: 0.7 };
+
+// ── study-session pieces shared with focus/session.py (tested for parity) ──
+export const REFOCUS_S = 10, TOAST_S = 8;
+
+// One step of the distraction episode with hysteresis. st: {distractedS, focusedS,
+// episodeStart, backSince, lastReturnT, episodes}. Returns true when an episode just closed.
+export function episodeStep(st, away, dt, t) {
+  if (away) {
+    if (st.distractedS === 0) st.episodeStart = t;
+    st.distractedS += dt; st.focusedS = 0; st.backSince = null;
+    return false;
+  }
+  if (st.distractedS <= 0) return false;
+  st.backSince ??= t;
+  st.focusedS += dt;
+  const need = st.distractedS >= 9 ? 4.5 : st.distractedS >= 3 ? 1.5 : 0.5;
+  if (st.focusedS < need) return false;
+  if (st.distractedS >= 5) st.episodes.push({ start: st.episodeStart, dur: st.distractedS });
+  st.lastReturnT = st.backSince; st.backSince = null;
+  st.distractedS = 0; st.focusedS = 0;
+  return true;
+}
+
+// Resolve pending decisions. A decision "worked" if the person came back within REFOCUS_S
+// (first focused frame of a return that then held). Nudges wait for their toast to close.
+// Returns the decisions resolved now (each with refocused and reward set).
+export function resolvePending(pending, t, closed, lastReturnT) {
+  const done = [];
+  for (const d of pending) {
+    if (d.resolved) continue;
+    if (closed && d.returnT == null && lastReturnT != null && lastReturnT >= d.t) d.returnT = lastReturnT;
+    if (t < d.t + (d.action !== 'wait' ? TOAST_S : 0)) continue;
+    if (d.returnT != null || t - d.t >= REFOCUS_S + 4.5) {
+      d.resolved = true;
+      d.refocused = d.returnT != null && d.returnT - d.t <= REFOCUS_S;
+      d.reward = reward(d.action, d.refocused, d.notHelpful);
+      done.push(d);
+    }
+  }
+  return done;
+}

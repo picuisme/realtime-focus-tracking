@@ -53,9 +53,9 @@ def main():
 
     # population prior: one LinUCB learning online over the training users
     prior = LinUCB(seed=a.seed)
-    for u in train:
+    for k, u in enumerate(train):
         for s in range(a.sessions):
-            run_session(u, lambda x, i: prior.act(x), np.random.default_rng(hash((id(u), s)) % 2**32), learn=prior.update)
+            run_session(u, lambda x, i: prior.act(x), np.random.default_rng(1_000 * k + s), learn=prior.update)
 
     def evaluate(make_choose, personal=False):
         out, logs = [], []

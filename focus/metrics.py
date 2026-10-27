@@ -33,20 +33,25 @@ def event_metrics(gt: np.ndarray, pred: np.ndarray, hz: float = 3.0, min_event_s
                   tolerance_s: float = 2.0) -> EventReport:
     """gt, pred: binary arrays on the same time grid.
     - An event = a run of gt == 1 lasting >= min_event_s.
-    - Detected if pred fires anywhere in [start, end + tolerance].
-    - Latency = first firing time - start (0 if already firing).
+    - Detected if pred fires anywhere in [start - tolerance, end + tolerance].
+    - Latency = first firing time - start (0 if it fired at or just before the start).
     - A false alarm = a pred onset that is not within tolerance of any gt == 1 sample."""
     gt = np.asarray(gt, dtype=bool)
     pred = np.asarray(pred, dtype=bool)
+    if gt.shape != pred.shape:
+        raise ValueError(f"gt and pred differ in length: {gt.shape} vs {pred.shape}")
     tol = int(round(tolerance_s * hz))
     events = [(s, e) for s, e in runs(gt) if (e - s) / hz >= min_event_s]
     detected, lat = 0, []
     for s, e in events:
-        hit = np.where(pred[s: min(len(pred), e + tol)])[0]
+        lo = max(0, s - tol)
+        hit = np.where(pred[lo: min(len(pred), e + tol)])[0]
         if len(hit):
             detected += 1
-            lat.append(hit[0] / hz)
-    near_pos = np.convolve(gt.astype(int), np.ones(2 * tol + 1, dtype=int), mode="same") > 0
+            lat.append(max(0, hit[0] + lo - s) / hz)   # an alarm already on (or within tolerance before) = 0 latency
+    near_pos = np.zeros_like(gt)
+    for s, e in runs(gt):
+        near_pos[max(0, s - tol): min(len(gt), e + tol)] = True
     fa = sum(1 for s, _ in runs(pred) if not near_pos[s])
     neg_h = float((~gt).sum()) / hz / 3600.0
     return EventReport(

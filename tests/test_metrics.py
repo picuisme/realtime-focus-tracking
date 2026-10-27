@@ -37,3 +37,16 @@ def test_grouped_bootstrap_ci_brackets_point():
     g = np.repeat(np.arange(20), 20)
     p, lo, hi = grouped_bootstrap_ci(y, s, g, n=200)
     assert lo <= p <= hi and 0.5 < p < 1
+
+
+def test_short_series_alignment():
+    gt = np.array([0, 0, 0, 0, 1], bool)
+    pred = np.array([1, 0, 0, 0, 0], bool)       # 4 samples before the positive, tolerance 2 s = 6 samples
+    assert event_metrics(gt, pred, min_event_s=0).false_alarms == 0
+
+
+def test_alarm_just_before_event_counts_as_detection():
+    gt = np.zeros(300, bool); gt[100:130] = True
+    pred = np.zeros(300, bool); pred[97:99] = True
+    r = event_metrics(gt, pred, min_event_s=5)
+    assert r.detected == 1 and r.false_alarms == 0 and r.median_latency_s == 0

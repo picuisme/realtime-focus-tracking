@@ -42,7 +42,7 @@ def load(d: Path) -> list[dict]:
 
 
 def rule(x):
-    e = x[1] * 60
+    e = x[1] * 180
     return {"sound" if e >= 90 else "toast" if e >= 9 else "wait": 1.0}
 
 

@@ -53,6 +53,12 @@ def build(csv_paths):
     return pd.concat(rows, ignore_index=True)
 
 
+def best_threshold(y, s) -> float:
+    """Threshold maximising balanced accuracy on the given (training) scores."""
+    qs = np.unique(np.quantile(s, np.linspace(0.02, 0.98, 49)))
+    return float(max(qs, key=lambda t: balanced_accuracy_score(y, s > t)))
+
+
 def models():
     out = {"logistic": make_pipeline(StandardScaler(), LogisticRegression(C=0.3, max_iter=2000, random_state=SEED))}
     try:
@@ -78,27 +84,34 @@ def main():
     X, y, groups = data[FEATURES].values, data.y.values, data.subject.values
     folds = data.fold.values if data.fold.nunique() >= 3 and "na" not in set(data.fold) else None
     n_subj = len(np.unique(groups))
-    splitter = list(GroupKFold(n_splits=min(5, n_subj)).split(X, y, folds if folds is not None else groups))
+    split_on = folds if folds is not None else groups
+    splitter = list(GroupKFold(n_splits=min(5, len(np.unique(split_on)))).split(X, y, split_on))
 
-    oof = {"perclos": data["perclos60"].values.astype(float)}
+    # out-of-fold scores, and a decision threshold chosen on each TRAINING fold only
+    oof, oof_pred = {}, {}
+    perclos = data["perclos60"].values.astype(float)
+    oof["perclos"], oof_pred["perclos"] = perclos, np.zeros(len(y), bool)
+    for tr, te in splitter:
+        oof_pred["perclos"][te] = perclos[te] > best_threshold(y[tr], perclos[tr])
     for name, m in models().items():
-        p = np.zeros(len(y))
+        p, pr = np.zeros(len(y)), np.zeros(len(y), bool)
         for tr, te in splitter:
             m.fit(X[tr], y[tr])
             p[te] = m.predict_proba(X[te])[:, 1]
-        oof[name] = p
+            pr[te] = p[te] > best_threshold(y[tr], m.predict_proba(X[tr])[:, 1])
+        oof[name], oof_pred[name] = p, pr
 
     report = {"task": "UTA-RLDD alert (0) vs drowsy (10), windows of 60 s every 1 s",
               "subjects": int(n_subj), "videos": int(data.session.nunique()), "windows": int(len(y)),
-              "split": "UTA folds" if folds is not None else f"GroupKFold by subject ({len(splitter)} folds)",
+              "split": f"UTA folds ({len(splitter)})" if folds is not None else f"GroupKFold by subject ({len(splitter)} folds)",
+              "threshold": "chosen on each training fold (max balanced accuracy), applied to its test fold",
               "features": FEATURES, "models": {}}
     for name, s in oof.items():
         auc, lo, hi = grouped_bootstrap_ci(y, s, groups)
         vid = data.assign(s=s).groupby("session").agg(s=("s", "mean"), y=("y", "first"))
         vauc = roc_auc_score(vid.y, vid.s) if vid.y.nunique() == 2 else float("nan")
-        thr = np.median(s)
         report["models"][name] = {"window_auroc": auc, "window_auroc_ci95": [lo, hi], "video_auroc": float(vauc),
-                                  "balanced_accuracy_at_median": float(balanced_accuracy_score(y, s > thr))}
+                                  "balanced_accuracy": float(balanced_accuracy_score(y, oof_pred[name]))}
 
     # low-vigilant videos: where does the shipped model put them?
     final = models()["logistic"].fit(X, y)
