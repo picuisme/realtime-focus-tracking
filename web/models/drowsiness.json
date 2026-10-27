@@ -1,0 +1,71 @@
+{
+  "features": [
+    "ear_rel_mean20",
+    "ear_rel_std20",
+    "perclos60",
+    "closures_per_min60",
+    "longest_closure60",
+    "mar_mean60",
+    "yawn_frac60",
+    "pitch_rel_mean20",
+    "pitch_std20",
+    "yaw_std20",
+    "abs_yaw_rel_mean20",
+    "gaze_std20",
+    "face_missing60"
+  ],
+  "used": [
+    "perclos60"
+  ],
+  "mean": [
+    0.0,
+    0.0,
+    0.07707324452754813,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "scale": [
+    1.0,
+    1.0,
+    0.10916280655181923,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "coef": [
+    0.0,
+    0.0,
+    1.6302735063730698,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "intercept": 0.21857697469225432,
+  "model": "perclos",
+  "subjects": 24,
+  "window_auroc_oof": 0.7411849800563619,
+  "trained_on": "UTA-RLDD folds 1-2 (development set), alert vs drowsy, 60 s windows",
+  "evaluated": "provisional: cross-validated on the development set only; held-out folds 3-5 pending"
+}

@@ -1,14 +1,17 @@
-Development set only: UTA-RLDD folds 1-2, 18 people, 36 alert/drowsy videos, 5-fold CV by person.
-Window AUROC with 95% person-bootstrap CI, then video-level AUROC.
+Development set only: UTA-RLDD folds 1-2, 24 people, 48 alert/drowsy videos, 28 896 windows of 60 s.
+5-fold cross-validation by person. Window AUROC with 95% person-bootstrap CI, then video-level AUROC.
 
-perclos (raw value)      auroc=0.745 [0.660,0.831] video=0.824
-logit_all_C0.3           auroc=0.613 [0.524,0.721] video=0.642
-logit_all_C0.03          auroc=0.611 [0.524,0.719] video=0.639
-logit_all_C0.003         auroc=0.606 [0.527,0.709] video=0.627
-logit_eye_C0.03          auroc=0.699 [0.607,0.798] video=0.759
-logit_eye_head_C0.03     auroc=0.669 [0.584,0.760] video=0.722
-logit_perclos_only       auroc=0.712 [0.637,0.800] video=0.772
-lightgbm (all 13)        auroc=0.697 [0.611,0.798] video=0.775
+perclos (raw value)      auroc=0.741 [0.667,0.813] video=0.806
+logit_perclos_only       auroc=0.734 [0.659,0.802] video=0.811
+logit_eye_C0.03          auroc=0.709 [0.637,0.784] video=0.783
+lightgbm (all 13)        auroc=0.711 [0.638,0.778] video=0.790
+logit_eye_head_C0.03     auroc=0.692 [0.627,0.758] video=0.767
+logit_all_C0.3           auroc=0.678 [0.612,0.744] video=0.748
+logit_all_C0.03          auroc=0.677 [0.612,0.745] video=0.740
 
-Choice for the held-out test (scripts/evaluate_holdout.py): candidates perclos and logit_eye,
-ship logit_eye only if it beats perclos on folds 3-5.
+(An earlier run on the first 18 people gave the same ordering: perclos 0.745, logit_eye 0.699, logit_all 0.613.)
+
+Held-out test (scripts/evaluate_holdout.py, fixed in commit "Pre-register the held-out drowsiness evaluation"):
+candidates perclos and logit_eye; ship logit_eye only if it beats perclos on folds 3-5.
+Until folds 3-5 can be downloaded, the app ships the default: PERCLOS mapped to 0-1 by a
+logistic fit on the 24 development people (web/models/drowsiness.json).
