@@ -1,0 +1,14 @@
+Development set only: UTA-RLDD folds 1-2, 18 people, 36 alert/drowsy videos, 5-fold CV by person.
+Window AUROC with 95% person-bootstrap CI, then video-level AUROC.
+
+perclos (raw value)      auroc=0.745 [0.660,0.831] video=0.824
+logit_all_C0.3           auroc=0.613 [0.524,0.721] video=0.642
+logit_all_C0.03          auroc=0.611 [0.524,0.719] video=0.639
+logit_all_C0.003         auroc=0.606 [0.527,0.709] video=0.627
+logit_eye_C0.03          auroc=0.699 [0.607,0.798] video=0.759
+logit_eye_head_C0.03     auroc=0.669 [0.584,0.760] video=0.722
+logit_perclos_only       auroc=0.712 [0.637,0.800] video=0.772
+lightgbm (all 13)        auroc=0.697 [0.611,0.798] video=0.775
+
+Choice for the held-out test (scripts/evaluate_holdout.py): candidates perclos and logit_eye,
+ship logit_eye only if it beats perclos on folds 3-5.
