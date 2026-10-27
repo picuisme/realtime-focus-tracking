@@ -116,8 +116,11 @@ def calculate_brow_dist(face_landmarks, frame_shape):
     return dist
 
 def calculate_gaze_ratio(face_landmarks):
-    # Right eye, iris center: 473, right corner: 33, left corner: 133
-    # Left eye, iris center: 468, right corner: 362, left corner: 263
+    # MediaPipe iris centres: 468 sits in the eye whose corners are 33/133,
+    # 473 in the eye whose corners are 362/263. Distances are measured from the
+    # image-left corner of each eye (33 and 362), so both ratios move together
+    # when the gaze shifts sideways. The previous pairing crossed the eyes and
+    # returned ~2.4 instead of ~0.5, far outside the range the scaler was fit on.
     def gaze(iris_center_idx, right_corner_idx, left_corner_idx):
         iris = face_landmarks[iris_center_idx]
         right = face_landmarks[right_corner_idx]
@@ -129,8 +132,8 @@ def calculate_gaze_ratio(face_landmarks):
         return iris_dist / eye_width
         
     try:
-        left_gaze = gaze(468, 362, 263)
-        right_gaze = gaze(473, 33, 133)
+        left_gaze = gaze(468, 33, 133)
+        right_gaze = gaze(473, 362, 263)
         return (left_gaze + right_gaze) / 2.0
     except IndexError:
         return 0.5

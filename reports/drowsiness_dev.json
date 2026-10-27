@@ -1,0 +1,70 @@
+{
+  "task": "UTA-RLDD alert (0) vs drowsy (10), windows of 60 s every 1 s",
+  "subjects": 18,
+  "videos": 36,
+  "windows": 21299,
+  "split": "GroupKFold by subject (5 folds)",
+  "threshold": "chosen on each training fold (max balanced accuracy), applied to its test fold",
+  "features": [
+    "ear_rel_mean20",
+    "ear_rel_std20",
+    "perclos60",
+    "closures_per_min60",
+    "longest_closure60",
+    "mar_mean60",
+    "yawn_frac60",
+    "pitch_rel_mean20",
+    "pitch_std20",
+    "yaw_std20",
+    "abs_yaw_rel_mean20",
+    "gaze_std20",
+    "face_missing60"
+  ],
+  "models": {
+    "perclos": {
+      "window_auroc": 0.7448966103827245,
+      "window_auroc_ci95": [
+        0.6597154673156196,
+        0.8311899141061511
+      ],
+      "video_auroc": 0.8240740740740741,
+      "balanced_accuracy": 0.6564779632182969
+    },
+    "logistic": {
+      "window_auroc": 0.6134403804316371,
+      "window_auroc_ci95": [
+        0.5230901699233526,
+        0.7250102846083919
+      ],
+      "video_auroc": 0.6419753086419753,
+      "balanced_accuracy": 0.6103994336089071
+    },
+    "lightgbm": {
+      "window_auroc": 0.6972869250132094,
+      "window_auroc_ci95": [
+        0.6109774462075366,
+        0.7977167362247188
+      ],
+      "video_auroc": 0.7746913580246912,
+      "balanced_accuracy": 0.6638068304040154
+    }
+  },
+  "low_vigilant_mean_score": 0.4853789366101985,
+  "alert_mean_score": 0.37046176844903966,
+  "drowsy_mean_score": 0.6280482076953089,
+  "logistic_coefficients": {
+    "ear_rel_mean20": 0.18030730716104876,
+    "ear_rel_std20": 0.3360641599784685,
+    "perclos60": 1.6905673549605178,
+    "closures_per_min60": -0.32971762725541526,
+    "longest_closure60": 0.6337875925767518,
+    "mar_mean60": 0.17909135205250193,
+    "yawn_frac60": 2.8294186111916506,
+    "pitch_rel_mean20": -0.09752522101965766,
+    "pitch_std20": 0.039010549824945034,
+    "yaw_std20": -0.6491843904559198,
+    "abs_yaw_rel_mean20": 0.009123153626267495,
+    "gaze_std20": 0.23130836925627066,
+    "face_missing60": -0.06910946334246632
+  }
+}

@@ -1,4 +1,7 @@
-// app.js — camera loop, study mode (DQN + rules) and driver mode (DMS rules).
+// app.js — camera loop and UI for Focus Tracker v3.
+// Study mode: calibrated rules detect "away", a drowsiness model scores fatigue,
+// and a nudge policy (none / v2.1 rule / LinUCB bandit) decides what to do.
+// Driver mode: deterministic alarms only.
 import { FaceLandmarker, ObjectDetector, FilesetResolver }
   from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 import * as C from './core.js';
@@ -9,297 +12,384 @@ const OBJ_MODEL = 'https://storage.googleapis.com/mediapipe-models/object_detect
 
 const $ = id => document.getElementById(id);
 const video = $('video'), overlay = $('overlay'), octx = overlay.getContext('2d');
+const store = {
+  get(k, d = null) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
+};
 
-let face, objects, net, stream;
-let mode = 'study';
-let running = false;
+let face, objects, drowsyModel = null, banditPrior = null, stream;
+let mode = 'study', running = false;
 
 // ── settings ──────────────────────────────────────────────────────────────
-const settings = { age: 21, occupation: 'student', invertPitch: false, phone: true, sound: true };
-function readSettings() {
-  settings.age = Number($('age').value) || 21;
-  settings.occupation = $('occupation').value;
-  settings.invertPitch = $('invertPitch').checked;
-  settings.phone = $('phoneToggle').checked;
-  settings.sound = $('soundToggle').checked;
+const S0 = { participant: '', condition: 'C', level: 'medium', phone: true, sound: true, invertPitch: false, camera: 'user' };
+const settings = { ...S0, ...store.get('ft.settings', {}) };
+const LEVELS = { low: { perHour: 4, firstS: 8 }, medium: { perHour: 6, firstS: 5 }, high: { perHour: 10, firstS: 5 } };
+function applySettingsToForm() {
+  $('participant').value = settings.participant; $('condition').value = settings.condition; $('level').value = settings.level;
+  $('phoneToggle').checked = settings.phone; $('soundToggle').checked = settings.sound; $('invertPitch').checked = settings.invertPitch;
+  $('cameraSel').value = settings.camera;
 }
-['age','occupation','invertPitch','phoneToggle','soundToggle'].forEach(id => $(id).addEventListener('change', readSettings));
+function readSettings() {
+  Object.assign(settings, {
+    participant: $('participant').value.trim(), condition: $('condition').value, level: $('level').value,
+    phone: $('phoneToggle').checked, sound: $('soundToggle').checked, invertPitch: $('invertPitch').checked, camera: $('cameraSel').value,
+  });
+  store.set('ft.settings', settings);
+  renderConditionNote();
+}
+['participant', 'condition', 'level', 'phoneToggle', 'soundToggle', 'invertPitch', 'cameraSel'].forEach(id => $(id).addEventListener('change', readSettings));
 
-// ── calibration: neutral head pose + open-eye EAR (helps users with glasses) ─
-const calib = { active: false, until: 0, samples: [], pitch0: 0, yaw0: 0, ear0: 0.28, done: false };
+const CONDITION_TEXT = { A: 'A · Không nhắc (chỉ ghi nhận)', B: 'B · Luật cố định của v2.1', C: 'C · Bandit học theo phản ứng' };
+function renderConditionNote() { $('conditionNote').textContent = CONDITION_TEXT[settings.condition]; }
+
+// ── calibration ───────────────────────────────────────────────────────────
+const calib = { active: false, until: 0, samples: [], pitch: 0, yaw: 0, ear: 0.28, done: false };
 function startCalibration() {
-  calib.active = true; calib.samples = []; calib.until = performance.now() + 4000;
-  toast('Nhìn thẳng vào màn hình / mặt đường trong 4 giây…', 'info', 4000);
+  Object.assign(calib, { active: true, samples: [], until: performance.now() + 4000 });
+  toast(mode === 'study' ? 'Nhìn vào màn hình như lúc đang làm việc trong 4 giây…' : 'Nhìn thẳng ra đường trong 4 giây…', 'info', 4000);
 }
 function finishCalibration() {
   calib.active = false;
-  if (calib.samples.length < 10) { toast('Chưa thấy khuôn mặt rõ, hãy thử hiệu chỉnh lại.', 'warn'); return; }
-  const med = k => { const a = calib.samples.map(s => s[k]).sort((x, y) => x - y); return a[a.length >> 1]; };
-  calib.pitch0 = med('pitch'); calib.yaw0 = med('yaw'); calib.ear0 = med('ear'); calib.done = true;
-  $('calibInfo').textContent = `EAR mở mắt ${calib.ear0.toFixed(3)} · ngưỡng nhắm ${earThreshold().toFixed(3)}`;
+  if (calib.samples.length < 10) { toast('Chưa thấy khuôn mặt rõ. Bấm Hiệu chỉnh lại khi đã ngồi đúng chỗ.', 'warn'); return; }
+  const med = k => C.median(calib.samples.map(s => s[k]));
+  Object.assign(calib, { pitch: med('pitch'), yaw: med('yaw'), ear: med('ear'), done: true });
+  $('calibInfo').textContent = `Đã hiệu chỉnh: mắt mở EAR ${calib.ear.toFixed(3)}, coi là nhắm khi dưới ${(calib.ear * C.CLOSED).toFixed(3)}.`;
   toast('Đã hiệu chỉnh.', 'ok');
 }
-const earThreshold = () => calib.done ? Math.min(0.2, calib.ear0 * 0.7) : 0.2;
+const earClosed = () => (calib.done ? calib.ear * C.CLOSED : 0.2);
 
-// ── per-frame state ───────────────────────────────────────────────────────
-const S = {
-  t0: 0, lastT: 0, lastPolicyT: 0,
-  distractedSec: 0, lookDownSec: 0, closedSec: 0, offRoadSec: 0, phoneSec: 0, missingSec: 0,
-  last: { yaw: 0, pitch: 0, ear: 0 },
-  window: [], phoneCount: 0, objPerson: 0, lastObjT: 0,
-  perclos: [],                 // [t, closed] samples for the rolling PERCLOS window
-  yawnOpenSec: 0, yawns: [],   // timestamps of completed yawns
-  history: [],                 // [t, distracted 0/1] for the strip chart
-  log: [],                     // feature rows, same schema as data/focus_dataset.csv
-  sessionId: Math.random().toString(36).slice(2, 10),
-  lastToastT: 0, hardShown: false, lastAlarmT: 0,
+// ── session state ─────────────────────────────────────────────────────────
+let S;
+function newSession() {
+  const now = performance.now();
+  S = {
+    // settings are frozen for the session so a mid-session change cannot mix conditions or people
+    cfg: { condition: settings.condition, level: settings.level, participant: settings.participant || 'anon' },
+    id: Math.random().toString(36).slice(2, 10), startedAt: new Date().toISOString(), t0: now, lastT: now, lastSampleT: 0,
+    samples: [], log: [], decisions: [], timeline: [],
+    distractedS: 0, focusedS: 0, lookDownS: 0, reasons: [], episodes: [], episodeStart: null,
+    focusS: 0, awayS: 0, drowsy: null, drowsyHist: [],
+    budget: new C.NudgeBudget({ perHour: LEVELS[settings.level].perHour }),
+    nextDecisionAt: LEVELS[settings.level].firstS, pending: [], nudgeTimes: [],
+    nSamples: 0, backSince: null, lastReturnT: null, hiddenS: 0,
+    selfLabel: 0, meeting: false, notes: false, phoneCount: 0, phoneBoxes: [], objPerson: 0, lastObjT: 0,
+    // driver
+    closedS: 0, offRoadS: 0, phoneS: 0, perclos: [], yawnOpenS: 0, yawns: [], lastAlarmT: 0, level: 'ok',
+  };
+  bandit = makeBandit();
+  ['meetingBtn', 'notesBtn', 'labelBtn'].forEach(id => $(id).setAttribute('aria-pressed', 'false'));
+  $('meetingBtn').textContent = 'Chế độ họp'; $('notesBtn').textContent = 'Chế độ ghi chép';
+  $('labelBtn').textContent = 'Tự báo mất tập trung (phím D)';
+}
+
+// ── nudge policy ──────────────────────────────────────────────────────────
+let bandit = null;
+function banditKey() { return `ft.bandit.${S?.cfg.participant ?? (settings.participant || 'anon')}`; }
+function makeBandit() {
+  const saved = store.get(banditKey());
+  if (saved) return C.LinUCB.fromJSON(saved);
+  return banditPrior ? C.LinUCB.fromJSON(banditPrior) : new C.LinUCB();
+}
+function saveBandit() { if (bandit) store.set(banditKey(), bandit.toJSON()); }
+$('resetBandit').addEventListener('click', () => {
+  try { localStorage.removeItem(banditKey()); } catch { /* ignore */ }
+  bandit = makeBandit(); toast('Đã đặt lại model nhắc nhở về trạng thái ban đầu.', 'ok');
+});
+
+function decide(x) {
+  if (S.cfg.condition === 'A') return ['wait', 1];
+  if (S.cfg.condition === 'B') return [C.ruleV21(S.distractedS), 1];
+  return bandit.act(x);
+}
+
+const NUDGE_TEXT = {
+  toast: 'Bạn đang rời khỏi việc đang làm. Quay lại nhé.',
+  sound: 'Quay lại tập trung nào.',
+  break: 'Có vẻ bạn đang mệt. Nghỉ 5 phút rồi quay lại sẽ hiệu quả hơn.',
+  dim: 'Màn hình tối đi một chút để nhắc bạn quay lại.',
 };
+function performNudge(action, decision) {
+  if (action === 'wait') return;
+  if (action === 'sound') beep(660, 0.25, 0.12);
+  if (action === 'dim') { $('dim').hidden = false; setTimeout(() => { $('dim').hidden = true; }, 5000); }
+  toast(NUDGE_TEXT[action], action === 'break' ? 'info' : 'warn', 20000, () => { decision.notHelpful = true; toast('Đã ghi nhận. Cảm ơn bạn.', 'ok', 2000); });
+}
 
-function resetState() {
-  Object.assign(S, { t0: performance.now(), lastT: performance.now(), lastPolicyT: 0, distractedSec: 0, lookDownSec: 0,
-    closedSec: 0, offRoadSec: 0, phoneSec: 0, missingSec: 0, window: [], perclos: [], yawnOpenSec: 0, yawns: [],
-    history: [], hardShown: false });
+function decisionPoint(now, elapsed) {
+  const sinceNudge = S.nudgeTimes.length ? elapsed - S.nudgeTimes.at(-1) : 600;
+  const recent = S.nudgeTimes.filter(t => elapsed - t < 600).length;
+  const reasons = S.reasons.map(r => (r === 'no_face' ? 'absent' : r));
+  const x = C.context(S.distractedS, S.drowsy ?? 0, sinceNudge, recent, elapsed, new Date().getHours() + new Date().getMinutes() / 60, reasons);
+  const suppressed = S.meeting || S.notes;
+  const capped = !S.budget.available(elapsed);
+  let action = 'wait', p = 1, why = 'policy';
+  if (suppressed) why = S.meeting ? 'meeting' : 'notes';
+  else if (capped) why = 'budget';
+  else [action, p] = decide(x);
+  const d = { t: elapsed, x, action, p, why, condition: S.cfg.condition, returnT: null, distractedS: S.distractedS, reasons, drowsy: S.drowsy, notHelpful: false, resolved: false };
+  if (action !== 'wait') { S.budget.spend(elapsed); S.nudgeTimes.push(elapsed); }
+  performNudge(action, d);
+  S.pending.push(d);
+  S.lastDecision = d;
+  renderPolicy(x);
+}
+
+function resolveDecisions(elapsed, closed) {
+  for (const d of C.resolvePending(S.pending, elapsed, closed, S.lastReturnT)) {
+    if (d.why === 'policy' && d.condition === 'C') { bandit.update(d.x, d.action, d.reward); saveBandit(); }
+    S.decisions.push(d);
+  }
+  S.pending = S.pending.filter(d => !d.resolved);
 }
 
 // ── models ────────────────────────────────────────────────────────────────
+async function withFallback(make) {
+  try { return await make('GPU'); } catch (e) { console.warn('GPU delegate failed, using CPU', e); return make('CPU'); }
+}
 async function loadModels() {
-  setLoading('Đang tải mô hình nhận diện khuôn mặt…');
+  setLoading('Đang tải mô hình khuôn mặt…');
   const fileset = await FilesetResolver.forVisionTasks(WASM);
-  face = await FaceLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'GPU' }, runningMode: 'VIDEO', numFaces: 1,
-    outputFacialTransformationMatrixes: true,
-  });
+  face = await withFallback(delegate => FaceLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: FACE_MODEL, delegate }, runningMode: 'VIDEO', numFaces: 1, outputFacialTransformationMatrixes: true,
+  }));
   setLoading('Đang tải bộ phát hiện điện thoại…');
-  objects = await ObjectDetector.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: OBJ_MODEL, delegate: 'GPU' }, runningMode: 'VIDEO', scoreThreshold: 0.45, maxResults: 5,
-  });
-  setLoading('Đang tải chính sách DQN…');
-  net = new C.QNet(await (await fetch('./policy.bin')).arrayBuffer());
+  objects = await withFallback(delegate => ObjectDetector.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: OBJ_MODEL, delegate }, runningMode: 'VIDEO', scoreThreshold: 0.45, maxResults: 5,
+  }));
+}
+async function loadPolicies() {
+  try { drowsyModel = await (await fetch('./models/drowsiness.json')).json(); } catch { drowsyModel = null; }
+  try { banditPrior = await (await fetch('./models/nudge_prior.json')).json(); } catch { banditPrior = null; }
+  $('drowsyInfo').textContent = drowsyModel
+    ? `Logistic regression, ${drowsyModel.subjects} người trong UTA-RLDD, AUROC chéo ${drowsyModel.window_auroc_oof.toFixed(2)}`
+    : 'Chưa có model buồn ngủ, chỉ dùng PERCLOS.';
 }
 
 async function start() {
   try {
     $('startBtn').disabled = true;
+    try { audio ??= new AudioContext(); audio.resume?.(); } catch { audio = null; }   // must happen in the click (Safari)
     if (!face) await loadModels();
     setLoading('Đang xin quyền camera…');
-    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: settings.camera }, audio: false });
     video.srcObject = stream; await video.play();
+    document.body.dataset.mirror = settings.camera === 'user' ? '1' : '0';
     overlay.width = video.videoWidth; overlay.height = video.videoHeight;
     setLoading(null);
-    $('startBtn').hidden = true; $('stopBtn').hidden = false; $('calibBtn').disabled = false;
-    resetState(); running = true; readSettings();
+    $('startBtn').hidden = true; $('stopBtn').hidden = false; $('calibBtn').disabled = false; $('summary').hidden = true;
+    newSession(); running = true; lockSettings(true);
+    if (mode === 'driver') requestWakeLock();
     startCalibration();
-    requestAnimationFrame(loop);
+    schedule();
   } catch (e) {
     setLoading(null); $('startBtn').disabled = false;
-    toast(e.name === 'NotAllowedError' ? 'Trình duyệt chặn camera. Hãy cho phép camera cho trang này rồi thử lại.'
+    toast(e.name === 'NotAllowedError' ? 'Trình duyệt đang chặn camera. Cho phép camera cho trang này rồi thử lại.'
       : `Không khởi động được: ${e.message}`, 'warn', 8000);
   }
 }
+const LOCKED = ['participant', 'condition', 'level', 'cameraSel', 'resetBandit'];
+function lockSettings(on) {
+  LOCKED.forEach(id => { $(id).disabled = on; });
+  $('lockNote').hidden = !on;
+}
 function stop() {
-  running = false;
+  running = false; lockSettings(false);
   stream?.getTracks().forEach(t => t.stop());
+  wakeLock?.release?.(); wakeLock = null;
   $('startBtn').hidden = false; $('startBtn').disabled = false; $('stopBtn').hidden = true; $('calibBtn').disabled = true;
+  document.body.dataset.alarm = '0';
+  if (S && mode === 'study') showSummary();
 }
 
 // ── main loop ─────────────────────────────────────────────────────────────
 function loop() {
   if (!running) return;
   const now = performance.now();
-  const dt = Math.min(0.5, (now - S.lastT) / 1000); S.lastT = now;
+  const dt = Math.min(1.0, (now - S.lastT) / 1000); S.lastT = now;   // capped so a backgrounded tab does not jump
+  const elapsed = (now - S.t0) / 1000;
 
   const res = face.detectForVideo(video, now);
-  if (settings.phone && now - S.lastObjT > 400) {           // object detector at ~2.5 Hz
+  if (settings.phone && now - S.lastObjT > 400) {
     S.lastObjT = now;
     const det = objects.detectForVideo(video, now).detections;
-    S.phoneCount = det.filter(d => d.categories[0].categoryName === 'cell phone').length;
-    S.objPerson = det.some(d => d.categories[0].categoryName === 'person') ? 1 : 0;
-    S.phoneBoxes = det.filter(d => d.categories[0].categoryName === 'cell phone').map(d => d.boundingBox);
+    const cat = d => d.categories[0].categoryName;
+    S.phoneBoxes = det.filter(d => cat(d) === 'cell phone').map(d => d.boundingBox);
+    S.phoneCount = S.phoneBoxes.length;
+    S.objPerson = det.some(d => cat(d) === 'person') ? 1 : 0;
   } else if (!settings.phone) { S.phoneCount = 0; S.phoneBoxes = []; }
 
-  let m = { pitch: 0, yaw: 0, roll: 0, ear: 0, mar: 0, brow: 0, gaze: 0, person: 0 };
+  let m = { pitch: 0, yaw: 0, roll: 0, ear: 0, mar: 0, brow: 0, gaze: 0.5, person: S.objPerson };
   const lm = res.faceLandmarks?.[0];
   if (lm) {
     const pose = C.poseFromMatrix(res.facialTransformationMatrixes[0].data, settings.invertPitch);
-    m = { ...pose, ear: C.ear(lm), mar: C.mar(lm), brow: C.browDist(lm, video.videoWidth, video.videoHeight),
-      gaze: C.gazeRatio(lm), person: 1 };
+    const l43 = C.to43(lm, video.videoWidth, video.videoHeight);
+    m = { ...pose, ear: C.ear(l43), mar: C.mar(l43), brow: C.browDist(l43), gaze: C.gazeRatio(l43), person: 1 };
     if (calib.active) calib.samples.push({ pitch: m.pitch, yaw: m.yaw, ear: m.ear });
-    m.pitch -= calib.pitch0; m.yaw -= calib.yaw0;
-  } else if (S.objPerson) m.person = 1;
+  }
   if (calib.active && now > calib.until) finishCalibration();
 
-  drawOverlay(lm);
-  if (mode === 'study') studyStep(m, dt, now); else driverStep(m, dt, now);
-  requestAnimationFrame(loop);
-}
-
-// ── STUDY MODE: same rules as FocusAgentInference, but in seconds, not frames ─
-function studyStep(m, dt, now) {
-  const faceSeen = m.ear > 0;
-  S.lookDownSec = (m.pitch > 20 && Math.abs(m.yaw) < 20 && m.ear >= earThreshold()) ? S.lookDownSec + dt : 0;
-  const noteTaking = m.pitch > 20 && Math.abs(m.yaw) < 20 && S.phoneCount === 0 && m.ear >= earThreshold() && S.lookDownSec < 30;
-  const reasons = [];
-  if (m.person === 0) reasons.push('Không thấy người');
-  else if (!faceSeen) reasons.push('Không thấy khuôn mặt');
-  else {
-    if (m.ear < earThreshold()) reasons.push('Mắt nhắm');
-    if (Math.abs(m.yaw) > 40) reasons.push('Quay đầu sang bên');
-    if (Math.abs(m.pitch) > 30 && !noteTaking) reasons.push(m.pitch > 0 ? 'Cúi đầu quá lâu' : 'Ngửa đầu');
-    if (m.pitch < -25 && !reasons.includes('Ngửa đầu')) reasons.push('Nhìn lên');
-  }
-  if (S.phoneCount > 0) reasons.push('Có điện thoại');
-  const distracted = reasons.length > 0 ? 1 : 0;
-  // Hysteresis (same idea as the local focus_env.py change): the longer the distraction,
-  // the longer focus must be sustained before the counter resets (5/15/45 frames at 10 fps).
-  if (distracted) { S.distractedSec += dt; S.focusedSec = 0; }
-  else {
-    S.focusedSec = (S.focusedSec || 0) + dt;
-    const need = S.distractedSec >= 9 ? 4.5 : S.distractedSec >= 3 ? 1.5 : 0.5;
-    if (S.focusedSec >= need) { S.distractedSec = 0; S.focusedSec = 0; }
-  }
-
-  // policy runs at 3 Hz so its window matches the training data (10 frames ≈ 3.3 s)
-  let decision = S.decision;
-  if (now - S.lastPolicyT >= 1000 / C.POLICY_HZ) {
-    S.lastPolicyT = now;
-    const elapsed = (now - S.t0) / 1000;
-    const fatigue = Math.min(1, Math.min(1, elapsed / 3600) * (0.4 - Math.min(m.ear, 0.4)) * 2.5);
-    const row = {
-      head_pitch: m.pitch, head_yaw: m.yaw, head_roll: m.roll, ear_score: m.ear, mar_score: m.mar, brow_dist: m.brow,
-      delta_yaw: m.yaw - S.last.yaw, delta_pitch: m.pitch - S.last.pitch, delta_ear: m.ear - S.last.ear, gaze_ratio: m.gaze,
-      person_detected: m.person, phone_count: S.phoneCount,
-      consecutive_frames: Math.round(S.distractedSec * C.POLICY_HZ), is_distracted_label: distracted, fatigue_score: fatigue,
-    };
-    S.last = { yaw: m.yaw, pitch: m.pitch, ear: m.ear };
-    S.window.push(C.scaleRow(row)); if (S.window.length > C.WINDOW_SIZE) S.window.shift();
-    S.log.push({ session_id: S.sessionId, timestamp: elapsed.toFixed(2), ...row });
-    if (S.log.length > 20000) S.log.shift();
-    S.history.push(distracted); if (S.history.length > 180) S.history.shift();
-
-    if (S.window.length === C.WINDOW_SIZE) {
-      const state = [...C.windowFeatures(S.window),
-        ...C.encodeContext(settings.age, new Date().getHours() + new Date().getMinutes() / 60, settings.occupation, elapsed)];
-      const { action, q } = net.act(state);
-      decision = { raw: action, q, final: applyOverrides(action, S.distractedSec, fatigue), fatigue };
-      S.decision = decision;
+  // 3 Hz sample stream (same rate as the training data)
+  if (now - S.lastSampleT >= 1000 / C.HZ) {
+    S.lastSampleT = now;
+    S.samples.push({ ear_score: m.ear, mar_score: m.mar, head_pitch: m.pitch, head_yaw: m.yaw, gaze_ratio: m.gaze });
+    if (S.samples.length > 600) S.samples.shift();
+    S.nSamples++;
+    if (S.nSamples >= 30 && S.nSamples % 3 === 0) {
+      const ref = S.nSamples >= C.REF_SAMPLES ? (S.ref ??= C.reference(S.samples)) : { ear: calib.ear, pitch: calib.pitch, yaw: calib.yaw };
+      S.features = C.windowFeatures(S.samples, ref);
+      S.drowsy = drowsyModel ? C.drowsiness(drowsyModel, S.features) : null;
+      if (S.drowsy != null) S.drowsyHist.push(S.drowsy);
     }
   }
-  renderStudy(m, reasons, decision);
-  actStudy(decision);
-}
 
-// Overrides from focus_env.FocusAgentInference, translated from 10-fps frame counts to seconds.
-function applyOverrides(raw, sec, fatigue) {
-  let a = C.ACTION_NAMES[raw];
-  if (sec < 5 && !(fatigue > 0.8 && a === 'Suggest Short Break')) a = 'Do Nothing';
-  if (sec >= 90) a = 'Sound Alert';
-  else if (sec >= 9 && a === 'Do Nothing') a = 'Gentle Visual Reminder';
-  if ((a === 'Sound Alert' || a === 'Suggest Short Break') && sec < 90) a = sec >= 9 ? 'Gentle Visual Reminder' : 'Do Nothing';
-  if (a === 'Play Focus Music') a = 'Do Nothing';
-  return a;
+  if (document.hidden) S.hiddenS += dt;
+  drawOverlay(lm);
+  if (mode === 'study') studyStep(m, dt, elapsed); else driverStep(m, dt, now);
+  schedule();
 }
+// requestAnimationFrame stops in a hidden tab; fall back to a timer so tracking continues
+// (browsers slow hidden timers to about once a second, which the summary reports).
+function schedule() { if (document.hidden) setTimeout(loop, 250); else requestAnimationFrame(loop); }
+document.addEventListener('visibilitychange', () => {
+  if (running && !document.hidden && S?.hiddenS > 5) toast('Khi tab này bị ẩn, trình duyệt làm chậm việc theo dõi. Để tab hiển thị (ví dụ đặt cạnh cửa sổ khác) hoặc dùng app desktop.', 'info', 9000);
+});
 
-const NUDGE_TEXT = {
-  'Gentle Visual Reminder': 'Bạn đang mất tập trung một lúc rồi. Quay lại việc đang làm nhé.',
-  'Dim Screen': 'Màn hình sẽ tối đi một chút để nhắc bạn quay lại.',
-  'Suggest Short Break': 'Có vẻ bạn đã mệt. Nghỉ 5 phút rồi quay lại sẽ hiệu quả hơn.',
-};
-function actStudy(d) {
-  const now = performance.now();
-  $('dim').hidden = !(d && d.final === 'Dim Screen');
-  if (!d) return;
-  if (d.final === 'Sound Alert' && !S.hardShown) {
-    S.hardShown = true; $('hardNudge').hidden = false; beep(660, 0.4);
-  } else if (NUDGE_TEXT[d.final] && now - S.lastToastT > 15000) {
-    S.lastToastT = now; toast(NUDGE_TEXT[d.final], 'warn', 5000); beep(520, 0.12, 0.05);
+// ── study mode ────────────────────────────────────────────────────────────
+function studyReasons(m) {
+  if (!m.person) return ['absent'];
+  if (m.ear <= 0) return ['no_face'];
+  const pitch = m.pitch - calib.pitch, yaw = m.yaw - calib.yaw, open = m.ear >= earClosed();
+  const noteTaking = (pitch > 20 && Math.abs(yaw) < 20 && S.phoneCount === 0 && open && S.lookDownS < 30) || S.notes;
+  const out = [];
+  if (!open) out.push('eyes_closed');
+  if (Math.abs(yaw) > 40) out.push('head_turned');
+  if (pitch > 30 && !noteTaking) out.push('head_down');
+  if (pitch < -25) out.push('looking_up');
+  if (S.phoneCount > 0) out.push('phone');
+  return out;
+}
+const REASON_TEXT = { absent: 'Không thấy người', no_face: 'Không thấy khuôn mặt', eyes_closed: 'Mắt nhắm', head_turned: 'Quay đầu sang bên',
+  head_down: 'Cúi đầu quá lâu', looking_up: 'Nhìn lên', phone: 'Có điện thoại' };
+
+function studyStep(m, dt, elapsed) {
+  const pitch = m.pitch - calib.pitch, yaw = m.yaw - calib.yaw;
+  S.lookDownS = (pitch > 20 && Math.abs(yaw) < 20 && m.ear >= earClosed()) ? S.lookDownS + dt : 0;
+  S.reasons = calib.active ? [] : studyReasons(m);
+  const away = S.reasons.length > 0;
+
+  // hysteresis: the longer the distraction, the longer focus must hold before it counts as over
+  const closed = C.episodeStep(S, away, dt, elapsed);
+  if (closed) S.nextDecisionAt = LEVELS[S.cfg.level].firstS;
+  if (S.distractedS > 0) S.awayS += dt; else S.focusS += dt;
+
+  if (S.distractedS >= S.nextDecisionAt) { decisionPoint(performance.now(), elapsed); S.nextDecisionAt += 15; }
+  resolveDecisions(elapsed, closed);
+
+  if (S.timeline.length === 0 || elapsed - S.timeline.at(-1).t >= 1) {
+    S.timeline.push({ t: elapsed, away: S.distractedS > 0 ? 1 : 0, nudge: S.lastDecision && S.lastDecision.t > elapsed - 1 && S.lastDecision.action !== 'wait' ? 1 : 0 });
+    S.log.push({
+      session_id: S.id, timestamp: elapsed.toFixed(2), head_pitch: m.pitch, head_yaw: m.yaw, head_roll: m.roll, ear_score: m.ear,
+      mar_score: m.mar, brow_dist: m.brow, gaze_ratio: m.gaze, person_detected: m.person, phone_count: S.phoneCount,
+      is_distracted_label: away ? 1 : 0, distracted_s: S.distractedS, drowsy: S.drowsy ?? '', gt_label: S.selfLabel,
+      meeting: S.meeting ? 1 : 0, notes: S.notes ? 1 : 0,
+    });
   }
+  renderStudy(m);
 }
-$('hardAck').addEventListener('click', () => { $('hardNudge').hidden = true; S.distractedSec = 0; S.hardShown = false; });
 
-// ── DRIVER MODE: deterministic DMS rules, no learned policy ───────────────
+// ── driver mode: deterministic alarms ─────────────────────────────────────
 function driverStep(m, dt, now) {
-  const D = C.DRIVER, t = now / 1000;
-  const faceSeen = m.ear > 0;
-  const closed = faceSeen && m.ear < earThreshold();
-  S.closedSec = closed ? S.closedSec + dt : 0;
+  const D = C.DRIVER, t = now / 1000, faceSeen = m.ear > 0;
+  const closed = faceSeen && m.ear < earClosed();
+  S.closedS = closed ? S.closedS + dt : 0;
   S.perclos.push([t, closed ? 1 : 0]);
-  while (S.perclos.length && S.perclos[0][0] < t - D.perclosWindowSec) S.perclos.shift();
+  while (S.perclos.length && S.perclos[0][0] < t - 60) S.perclos.shift();
   const perclos = S.perclos.reduce((s, p) => s + p[1], 0) / Math.max(1, S.perclos.length);
+  const coverage = S.perclos.length ? (S.perclos.at(-1)[0] - S.perclos[0][0]) / 60 : 0;
+  const pitch = m.pitch - calib.pitch, yaw = m.yaw - calib.yaw;
+  const offRoad = !faceSeen || Math.abs(yaw) > 30 || pitch > 25 || pitch < -20;
+  S.offRoadS = offRoad && !closed ? S.offRoadS + dt : 0;
+  S.phoneS = S.phoneCount > 0 ? S.phoneS + dt : 0;
+  if (m.mar > C.YAWN_MAR) S.yawnOpenS += dt; else { if (S.yawnOpenS >= 1.2) S.yawns.push(t); S.yawnOpenS = 0; }
+  S.yawns = S.yawns.filter(y => y > t - 300);
 
-  const offRoad = !faceSeen || Math.abs(m.yaw) > 30 || m.pitch > 25 || m.pitch < -20;
-  S.offRoadSec = offRoad && !closed ? S.offRoadSec + dt : 0;
-  S.phoneSec = S.phoneCount > 0 ? S.phoneSec + dt : 0;
-
-  if (m.mar > D.yawnMar) S.yawnOpenSec += dt;
-  else { if (S.yawnOpenSec >= D.yawnMinSec) S.yawns.push(t); S.yawnOpenSec = 0; }
-  S.yawns = S.yawns.filter(y => y > t - D.yawnWindowSec);
-
-  const coverage = S.perclos.length && (S.perclos[S.perclos.length - 1][0] - S.perclos[0][0]) / D.perclosWindowSec;
   let level = 'ok', msg = 'Tỉnh táo, mắt hướng về phía trước';
   if (S.yawns.length >= D.yawnWarnCount) { level = 'warn'; msg = `Ngáp ${S.yawns.length} lần trong 5 phút. Cân nhắc dừng nghỉ.`; }
+  if (S.drowsy != null && S.drowsy > D.drowsyWarn) { level = 'warn'; msg = `Model đánh giá buồn ngủ ${(S.drowsy * 100).toFixed(0)}%`; }
   if (coverage > 0.5 && perclos > D.perclosWarn) { level = 'warn'; msg = `Dấu hiệu buồn ngủ (PERCLOS ${(perclos * 100).toFixed(0)}%)`; }
-  if (coverage > 0.5 && perclos > D.perclosSevere) { level = 'alarm'; msg = 'Buồn ngủ nặng. Hãy dừng xe ở nơi an toàn.'; }
-  if (S.offRoadSec > D.offRoadSec) { level = 'alarm'; msg = faceSeen ? 'Mắt rời khỏi mặt đường!' : 'Không thấy khuôn mặt tài xế!'; }
-  if (S.phoneSec > D.phoneSec) { level = 'alarm'; msg = 'Đang dùng điện thoại khi lái!'; }
-  if (S.closedSec > D.microsleepSec) { level = 'alarm'; msg = 'NGỦ GẬT! Mở mắt ra!'; }
-
+  if (coverage > 0.5 && perclos > D.perclosAlarm) { level = 'alarm'; msg = 'Buồn ngủ nặng. Hãy dừng xe ở nơi an toàn.'; }
+  if (S.offRoadS > D.offRoadS) { level = 'alarm'; msg = faceSeen ? 'Mắt rời khỏi mặt đường!' : 'Không thấy khuôn mặt tài xế!'; }
+  if (S.phoneS > D.phoneS) { level = 'alarm'; msg = 'Đang dùng điện thoại khi lái!'; }
+  if (S.closedS > D.microsleepS) { level = 'alarm'; msg = 'NGỦ GẬT! Mở mắt ra!'; }
+  if (calib.active) { level = 'ok'; msg = 'Đang hiệu chỉnh…'; }
   if (level === 'alarm' && t - S.lastAlarmT > 0.6) { S.lastAlarmT = t; beep(880, 0.25, 0.25); }
-  if (now - S.lastPolicyT > 333) { S.lastPolicyT = now; S.history.push(level === 'ok' ? 0 : 1); if (S.history.length > 180) S.history.shift(); }
+  if (S.timeline.length === 0 || t - S.timeline.at(-1).t >= 1) S.timeline.push({ t, away: level === 'ok' ? 0 : 1 });
   renderDriver(m, { perclos, coverage, level, msg });
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 function drawOverlay(lm) {
   const w = overlay.width, h = overlay.height;
   octx.clearRect(0, 0, w, h);
-  const css = getComputedStyle(document.documentElement);
   if (lm) {
-    octx.fillStyle = css.getPropertyValue('--mesh').trim();
+    octx.fillStyle = css('--mesh');
     for (let i = 0; i < lm.length; i += 3) octx.fillRect(lm[i].x * w - 1, lm[i].y * h - 1, 2, 2);
-    octx.fillStyle = css.getPropertyValue('--accent').trim();
+    octx.fillStyle = css('--accent');
     [33, 133, 362, 263, 468, 473, 13, 14, 61, 291].forEach(i => lm[i] && octx.fillRect(lm[i].x * w - 2, lm[i].y * h - 2, 4, 4));
   }
-  octx.strokeStyle = css.getPropertyValue('--bad').trim(); octx.lineWidth = 3;
+  octx.strokeStyle = css('--bad'); octx.lineWidth = 3;
   (S.phoneBoxes || []).forEach(b => octx.strokeRect(b.originX, b.originY, b.width, b.height));
 }
-
-function setStatus(text, level) {
-  const el = $('status'); el.textContent = text; el.dataset.level = level;
-}
-function fmt(v, d = 1) { return Number.isFinite(v) ? v.toFixed(d) : '–'; }
+const fmt = (v, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : '–');
+const mmss = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function setStatus(text, level) { const el = $('status'); el.textContent = text; el.dataset.level = level; }
 
 function renderCommon(m) {
-  $('mPitch').textContent = fmt(m.pitch) + '°';
-  $('mYaw').textContent = fmt(m.yaw) + '°';
+  $('mPitch').textContent = `${fmt(m.pitch - calib.pitch)}°`;
+  $('mYaw').textContent = `${fmt(m.yaw - calib.yaw)}°`;
   $('mEar').textContent = fmt(m.ear, 3);
   $('mMar').textContent = fmt(m.mar, 2);
   $('mGaze').textContent = fmt(m.gaze, 2);
   $('mPhone').textContent = S.phoneCount ? 'Có' : 'Không';
-  const sec = Math.floor((performance.now() - S.t0) / 1000);
-  $('elapsed').textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+  $('elapsed').textContent = mmss((performance.now() - S.t0) / 1000);
+  const dz = S.drowsy;
+  $('drowsyVal').textContent = dz == null ? 'đang đo…' : `${Math.round(dz * 100)}%`;
+  $('drowsyBar').style.setProperty('--w', `${dz == null ? 0 : dz * 100}%`);
   drawStrip();
 }
 
-function renderStudy(m, reasons, d) {
+function renderStudy(m) {
   renderCommon(m);
-  const s = S.distractedSec;
-  if (m.person === 0) setStatus('Vắng mặt', 'alarm');
+  const s = S.distractedS;
+  if (calib.active) setStatus('Đang hiệu chỉnh', 'ok');
+  else if (S.meeting) setStatus('Đang họp', 'ok');
+  else if (!m.person) setStatus('Vắng mặt', 'alarm');
   else if (s < 3) setStatus('Tập trung', 'ok');
   else if (s < 9) setStatus('Cảnh báo sớm', 'warn');
   else setStatus('Mất tập trung', 'alarm');
-  $('reason').textContent = reasons.length ? reasons.join(' · ') : 'Đang nhìn vào màn hình';
+  $('reason').textContent = S.reasons.length ? S.reasons.map(r => REASON_TEXT[r]).join(' · ') : (S.notes ? 'Chế độ ghi chép' : 'Đang nhìn vào màn hình');
   $('timer').textContent = `${fmt(s)} s`;
-  if (!d) { $('rawAction').textContent = 'Đang gom 10 mẫu…'; return; }
-  $('rawAction').textContent = C.ACTION_NAMES[d.raw];
-  $('finalAction').textContent = d.final;
-  $('overridden').hidden = C.ACTION_NAMES[d.raw] === d.final;
-  $('fatigue').textContent = fmt(d.fatigue, 2);
-  const max = Math.max(...d.q), min = Math.min(...d.q);
-  d.q.forEach((v, i) => {
-    const bar = $('q' + i);
-    bar.style.setProperty('--w', `${max === min ? 100 : 15 + 85 * (v - min) / (max - min)}%`);
-    bar.dataset.best = i === d.raw ? '1' : '0';
-    bar.querySelector('b').textContent = v.toFixed(2);
+  const done = S.decisions.filter(d => d.action !== 'wait');
+  $('statNudges').textContent = String(S.nudgeTimes.length);
+  $('statUseful').textContent = done.length ? `${Math.round(100 * done.filter(d => d.refocused).length / done.length)}%` : '–';
+  $('statFocus').textContent = mmss(S.focusS);
+}
+
+const ACTION_TEXT = { wait: 'Chờ', toast: 'Nhắc nhẹ', sound: 'Âm thanh', break: 'Gợi ý nghỉ', dim: 'Làm tối màn hình' };
+function renderPolicy(x) {
+  const d = S.lastDecision;
+  $('lastAction').textContent = d ? `${ACTION_TEXT[d.action]}${d.why !== 'policy' ? ` (bỏ qua: ${{ meeting: 'đang họp', notes: 'đang ghi chép', budget: 'đã nhắc đủ' }[d.why]})` : ''}` : '–';
+  $('lastProb').textContent = d && d.why === 'policy' ? `${Math.round(d.p * 100)}%` : '–';
+  const show = S.cfg.condition === 'C';
+  $('qbars').hidden = !show;
+  if (!show) return;
+  const sc = bandit.scores(x, false), vals = Object.values(sc), max = Math.max(...vals), min = Math.min(...vals);
+  C.ACTIONS.forEach(a => {
+    const bar = $(`q-${a}`);
+    bar.style.setProperty('--w', `${max === min ? 100 : 15 + 85 * (sc[a] - min) / (max - min)}%`);
+    bar.dataset.best = sc[a] === max ? '1' : '0';
+    bar.querySelector('b').textContent = sc[a].toFixed(2);
   });
 }
 
@@ -307,68 +397,153 @@ function renderDriver(m, r) {
   renderCommon(m);
   setStatus(r.level === 'ok' ? 'Tỉnh táo' : r.level === 'warn' ? 'Cảnh báo' : 'NGUY HIỂM', r.level);
   $('reason').textContent = r.msg;
-  $('timer').textContent = `${fmt(S.offRoadSec)} s`;
-  $('dPerclos').textContent = r.coverage > 0.5 ? `${(r.perclos * 100).toFixed(0)}%` : `đang đo (${Math.round(r.coverage * 100)}%)`;
+  $('timer').textContent = `${fmt(S.offRoadS)} s`;
+  $('dPerclos').textContent = r.coverage > 0.5 ? `${Math.round(r.perclos * 100)}%` : `đang đo (${Math.round(r.coverage * 100)}%)`;
   $('dPerclosBar').style.setProperty('--w', `${Math.min(100, r.perclos / 0.4 * 100)}%`);
-  $('dClosed').textContent = `${fmt(S.closedSec)} s`;
-  $('dOff').textContent = `${fmt(S.offRoadSec)} s`;
+  $('dClosed').textContent = `${fmt(S.closedS)} s`;
+  $('dOff').textContent = `${fmt(S.offRoadS)} s`;
   $('dYawn').textContent = String(S.yawns.length);
   document.body.dataset.alarm = r.level === 'alarm' ? '1' : '0';
 }
 
-function drawStrip() {
-  const c = $('strip'), x = c.getContext('2d');
-  const W = c.width = c.clientWidth * devicePixelRatio, H = c.height = c.clientHeight * devicePixelRatio;
-  const css = getComputedStyle(document.documentElement);
+function drawStrip(canvas = $('strip'), tl = S.timeline.slice(-180), n = 180) {
+  const x = canvas.getContext('2d');
+  const W = canvas.width = canvas.clientWidth * devicePixelRatio, H = canvas.height = canvas.clientHeight * devicePixelRatio;
   x.clearRect(0, 0, W, H);
-  const n = 180, bw = W / n;
-  S.history.forEach((v, i) => {
-    x.fillStyle = css.getPropertyValue(v ? '--bad' : '--good').trim();
-    x.globalAlpha = v ? 0.9 : 0.35;
-    x.fillRect((n - S.history.length + i) * bw, v ? 0 : H * 0.6, Math.max(1, bw - 0.5), v ? H : H * 0.4);
+  const bw = W / n;
+  tl.forEach((p, i) => {
+    const xi = (n - tl.length + i) * bw;
+    x.fillStyle = css(p.away ? '--bad' : '--good'); x.globalAlpha = p.away ? 0.9 : 0.35;
+    x.fillRect(xi, p.away ? H * 0.15 : H * 0.6, Math.max(1, bw - 0.5), p.away ? H * 0.85 : H * 0.4);
+    if (p.nudge) { x.globalAlpha = 1; x.fillStyle = css('--accent'); x.fillRect(xi, 0, Math.max(2, bw), H * 0.12); }
   });
   x.globalAlpha = 1;
 }
 
+// ── session summary + questionnaire + exports ─────────────────────────────
+function summary() {
+  const total = (S.lastT - S.t0) / 1000;
+  const eps = [...S.episodes, ...(S.distractedS >= 5 ? [{ start: S.episodeStart, dur: S.distractedS }] : [])];
+  const nudges = S.decisions.filter(d => d.action !== 'wait');
+  return {
+    session_id: S.id, participant: S.cfg.participant, condition: S.cfg.condition, level: S.cfg.level,
+    started_at: S.startedAt, minutes: +(total / 60).toFixed(2), focused_minutes: +(S.focusS / 60).toFixed(2),
+    distraction_episodes: eps.length, mean_return_s: eps.length ? +(eps.reduce((s, e) => s + e.dur, 0) / eps.length).toFixed(1) : null,
+    nudges: nudges.length, nudges_per_hour: total > 0 ? +(nudges.length / total * 3600).toFixed(1) : 0,
+    useful_nudge_rate: nudges.length ? +(nudges.filter(d => d.refocused).length / nudges.length).toFixed(3) : null,
+    not_helpful: nudges.filter(d => d.notHelpful).length,
+    hidden_minutes: +(S.hiddenS / 60).toFixed(2),
+    mean_drowsiness: S.drowsyHist.length ? +(S.drowsyHist.reduce((a, b) => a + b, 0) / S.drowsyHist.length).toFixed(3) : null,
+    self_rated_focus: $('qFocus').value ? Number($('qFocus').value) : null,
+    self_rated_annoyance: $('qAnnoy').value ? Number($('qAnnoy').value) : null,
+  };
+}
+function showSummary() {
+  const s = summary();
+  $('sumMinutes').textContent = `${s.focused_minutes} / ${s.minutes} phút`;
+  $('sumEpisodes').textContent = String(s.distraction_episodes);
+  $('sumReturn').textContent = s.mean_return_s == null ? '–' : `${s.mean_return_s} s`;
+  $('sumNudges').textContent = `${s.nudges} (${s.useful_nudge_rate == null ? '–' : `${Math.round(s.useful_nudge_rate * 100)}% có ích`})`;
+  $('sumDrowsy').textContent = s.mean_drowsiness == null ? '–' : `${Math.round(s.mean_drowsiness * 100)}%`;
+  $('summary').hidden = false;
+  drawStrip($('sumStrip'), S.timeline, Math.max(S.timeline.length, 1));
+  $('summary').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function download(name, text, type = 'text/csv') {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const cell = v => {
+  if (typeof v === 'number') return String(+v.toFixed(5));
+  const t = Array.isArray(v) ? v.map(x => (typeof x === 'number' ? +x.toFixed(6) : x)).join(' ') : String(v ?? '');
+  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+};
+const csv = (cols, rows) => [cols.join(','), ...rows.map(r => cols.map(c => cell(r[c])).join(','))].join('\n');
+const pid = () => S?.cfg.participant ?? (settings.participant || 'anon');
+
+$('dlFeatures').addEventListener('click', () => {
+  if (!S?.log.length) return toast('Chưa có dữ liệu.', 'info');
+  const rows = S.log.map(r => ({ ...r, subject_id: pid(), source: 'web', condition: S.cfg.condition }));
+  download(`features_${pid()}_${S.id}.csv`, csv(['session_id', 'timestamp', 'head_pitch', 'head_yaw', 'head_roll', 'ear_score', 'mar_score',
+    'brow_dist', 'gaze_ratio', 'person_detected', 'phone_count', 'is_distracted_label', 'distracted_s', 'drowsy', 'meeting', 'notes',
+    'gt_label', 'subject_id', 'source', 'condition'], rows));
+});
+$('dlDecisions').addEventListener('click', () => {
+  if (!S?.decisions.length) return toast('Chưa có quyết định nhắc nào trong buổi này.', 'info');
+  const rows = S.decisions.map(d => ({ session_id: S.id, participant: pid(), condition: d.condition, t: d.t, action: d.action, p: d.p, why: d.why,
+    refocused: d.refocused ? 1 : 0, not_helpful: d.notHelpful ? 1 : 0, reward: d.reward, distracted_s: d.distractedS, drowsy: d.drowsy ?? '',
+    reasons: d.reasons, x: d.x }));
+  download(`decisions_${pid()}_${S.id}.csv`, csv(['session_id', 'participant', 'condition', 't', 'action', 'p', 'why', 'refocused', 'not_helpful',
+    'reward', 'distracted_s', 'drowsy', 'reasons', 'x'], rows));
+});
+$('dlSummary').addEventListener('click', () => {
+  if (!S) return;
+  const s = summary(); store.set(`ft.summary.${S.id}`, s);
+  download(`summary_${pid()}_${S.id}.json`, JSON.stringify(s, null, 2), 'application/json');
+});
+$('saveQ').addEventListener('click', () => {
+  if (!S) return;
+  store.set(`ft.summary.${S.id}`, summary());
+  toast('Đã lưu câu trả lời vào bản tổng kết.', 'ok');
+});
+
 // ── small utilities ───────────────────────────────────────────────────────
-let audio;
+let audio, wakeLock = null;
 function beep(freq, dur, gain = 0.15) {
-  if (!settings.sound) return;
-  audio ??= new AudioContext();
+  if (!settings.sound || !audio) return;
+  if (audio.state === 'suspended') audio.resume?.();
   const o = audio.createOscillator(), g = audio.createGain();
   o.frequency.value = freq; g.gain.value = gain; o.connect(g).connect(audio.destination);
   o.start(); o.stop(audio.currentTime + dur);
 }
-function toast(text, kind = 'info', ms = 4000) {
-  const el = document.createElement('div'); el.className = 'toast'; el.dataset.kind = kind; el.textContent = text;
+async function requestWakeLock() { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { wakeLock = null; } }
+function toast(text, kind = 'info', ms = 4000, onNotHelpful = null) {
+  const el = document.createElement('div'); el.className = 'toast'; el.dataset.kind = kind;
+  const p = document.createElement('span'); p.textContent = text; el.append(p);
+  if (onNotHelpful) {
+    const b = document.createElement('button'); b.className = 'linkbtn'; b.textContent = 'Không hữu ích';
+    b.addEventListener('click', () => { onNotHelpful(); el.remove(); }); el.append(b);
+    const x = document.createElement('button'); x.className = 'linkbtn'; x.textContent = 'Đóng';
+    x.addEventListener('click', () => el.remove()); el.append(x);
+  }
   $('toasts').append(el); setTimeout(() => el.remove(), ms);
 }
 function setLoading(text) { $('loading').hidden = !text; if (text) $('loadingText').textContent = text; }
 
 function setMode(next) {
+  if (running) stop();
   mode = next;
   document.body.dataset.mode = next; document.body.dataset.alarm = '0';
   document.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === next)));
-  $('dim').hidden = true; $('hardNudge').hidden = true;
-  S.history = []; S.distractedSec = 0; S.decision = null;
   $('timerLabel').textContent = next === 'study' ? 'Thời gian mất tập trung' : 'Thời gian rời mắt khỏi đường';
+  if (next === 'driver' && settings.camera === 'user' && matchMedia('(max-width: 600px)').matches) toast('Kẹp điện thoại sao cho camera trước nhìn thẳng vào mặt.', 'info', 6000);
 }
 document.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => setMode(b.dataset.tab)));
 
-function downloadCsv() {
-  if (!S.log.length) { toast('Chưa có dữ liệu. Bật camera ở chế độ Học tập trước.', 'info'); return; }
-  const cols = ['session_id','timestamp','head_pitch','head_yaw','head_roll','ear_score','mar_score','brow_dist','person_detected',
-    'phone_count','consecutive_frames','is_distracted_label','delta_yaw','delta_pitch','delta_ear','gaze_ratio','fatigue_score'];
-  const csv = [cols.join(','), ...S.log.map(r => cols.map(c => typeof r[c] === 'number' ? +r[c].toFixed(5) : r[c]).join(','))].join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = `focus_features_${S.sessionId}.csv`; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+function toggle(id, key, label) {
+  $(id).addEventListener('click', () => {
+    if (!S) return;
+    S[key] = !S[key];
+    $(id).setAttribute('aria-pressed', String(S[key]));
+    $(id).textContent = S[key] ? `Tắt chế độ ${label}` : `Chế độ ${label}`;
+  });
 }
+toggle('meetingBtn', 'meeting', 'họp');
+toggle('notesBtn', 'notes', 'ghi chép');
+function toggleSelfLabel() {
+  if (!S) return;
+  S.selfLabel = S.selfLabel ? 0 : 1;
+  $('labelBtn').setAttribute('aria-pressed', String(!!S.selfLabel));
+  $('labelBtn').textContent = S.selfLabel ? 'Đang ghi: MẤT TẬP TRUNG (phím D)' : 'Tự báo mất tập trung (phím D)';
+}
+$('labelBtn').addEventListener('click', toggleSelfLabel);
+addEventListener('keydown', e => { if ((e.key === 'd' || e.key === 'D') && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && mode === 'study') toggleSelfLabel(); });
 
 $('startBtn').addEventListener('click', start);
 $('stopBtn').addEventListener('click', stop);
 $('calibBtn').addEventListener('click', startCalibration);
-$('csvBtn').addEventListener('click', downloadCsv);
-setMode('study');
-if (!window.isSecureContext) toast('Camera chỉ chạy trên HTTPS hoặc localhost. Hãy mở qua GitHub Pages hoặc `python -m http.server`.', 'warn', 12000);
+applySettingsToForm(); renderConditionNote(); setMode('study'); loadPolicies();
+if (!window.isSecureContext) toast('Camera chỉ chạy trên HTTPS hoặc localhost. Mở qua GitHub Pages hoặc `python -m http.server`.', 'warn', 12000);

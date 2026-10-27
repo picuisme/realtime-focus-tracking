@@ -1,0 +1,5 @@
+# What CI installs: enough for the tests (no camera, no mediapipe needed)
+numpy
+pandas
+scikit-learn
+pytest

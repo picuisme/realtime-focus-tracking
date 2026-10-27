@@ -6,6 +6,13 @@ build/
 # Python caches
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Release archives (multi-GB)
 /FocusTracker-*.zip
+
+# Raw videos never go in the repo, only extracted features
+*.mp4
+*.avi
+*.mov
+*.MOV

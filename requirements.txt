@@ -1,25 +1,13 @@
-# Core ML & Vision
+# Runtime: desktop app, feature extraction, training
 numpy
 pandas
 scikit-learn
 opencv-python
 mediapipe
-ultralytics
-stable-baselines3
-gymnasium
-torch
-torchvision
-
-# LLM Integration
-google-genai
-
-# GUI and System
 pillow
-pystray
-pygame-ce
-pywin32
-pyinstaller
 
-# Evaluation plots (scripts/evaluate_model.py)
-matplotlib
-seaborn
+# Optional
+ultralytics      # phone detection in the desktop app (YOLOv8n)
+lightgbm         # comparison model in scripts/train_drowsiness.py
+pywin32; sys_platform == "win32"
+pyinstaller      # build_exe.py
