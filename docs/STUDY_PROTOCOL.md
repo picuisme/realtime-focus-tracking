@@ -34,6 +34,7 @@
 | Tự đánh giá mức tập trung, mức bị làm phiền (1–7) | `summary.self_rated_*` |
 | Điểm trắc nghiệm | Nhập tay vào `quiz.csv` (participant, condition, score) |
 | Nhãn tự báo | Cột `gt_label` trong `features_*.csv` |
+| Nhóm tuổi, ngành học | Lấy từ form đăng ký, người thực hiện nhập vào `participants.csv` (participant, age_group, field); không nhập vào app |
 
 ## Phân tích
 
@@ -44,6 +45,7 @@ python scripts/analyze_study.py --dir study_data/ --out reports/study.json
 - So sánh cặp trong từng người (C − B, B − A, C − A) cho mỗi biến, khoảng tin cậy 95% bằng bootstrap theo người.
 - Nếu có `statsmodels`: mô hình hỗn hợp `biến ~ điều kiện + thứ tự buổi + (1 | người)`.
 - Báo cáo mọi biến đã chốt ở trên, kể cả khi không có ý nghĩa thống kê.
+- Phân tích khám phá: chênh lệch C − B theo nhóm tuổi và ngành học, khi có `participants.csv`. Với 18 người, kết quả này chỉ để gợi ý hướng nghiên cứu, không dùng để kết luận.
 - Off-policy evaluation trên log của điều kiện C: ước lượng giá trị của luật v2.1 và của chính sách "không nhắc" bằng IPS, SNIPS và DR (`focus/bandit.py`).
 
 ## Đạo đức và dữ liệu

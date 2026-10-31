@@ -1,8 +1,12 @@
 """Analyse the within-subject study (docs/STUDY_PROTOCOL.md).
 
-Reads every summary_*.json (and optional decisions_*.csv, quiz.csv) under --dir,
+Reads every summary_*.json (and optional quiz.csv, participants.csv) under --dir,
 computes per-condition means and paired differences with bootstrap CIs
 resampled by participant, plus a mixed model when statsmodels is installed.
+
+participants.csv (participant, age_group, field) is kept by the researcher, not by
+the app. When present, the C - B difference is also reported per group. With 18
+people these breakdowns are exploratory only.
 
     python scripts/analyze_study.py --dir study_data/ --out reports/study.json
 """
@@ -34,7 +38,19 @@ def load(d: Path) -> pd.DataFrame:
     quiz = d / "quiz.csv"
     if quiz.exists():
         df = df.merge(pd.read_csv(quiz), on=["participant", "condition"], how="left")
+    people = d / "participants.csv"
+    if people.exists():
+        df = df.merge(pd.read_csv(people), on="participant", how="left")
     return df
+
+
+def by_group(df, metric, col):
+    out = {}
+    for g, sub in df.groupby(col):
+        r = paired(sub, metric, "C", "B")
+        if r:
+            out[str(g)] = r
+    return out
 
 
 def paired(df, metric, a, b, n=2000, seed=0):
@@ -61,6 +77,9 @@ def main():
            "by_condition": df.groupby("condition")[present].mean().round(3).to_dict(orient="index"), "paired": {}}
     for m in present:
         rep["paired"][m] = {f"{x}-{y}": paired(df, m, x, y) for x, y in PAIRS}
+    groups = [c for c in ("age_group", "field") if c in df.columns]
+    if groups:
+        rep["c_minus_b_by_group"] = {c: {m: by_group(df, m, c) for m in present} for c in groups}
     try:
         import statsmodels.formula.api as smf
         rep["mixed_models"] = {}
