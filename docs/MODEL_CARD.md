@@ -4,11 +4,11 @@
 
 **Dùng để làm gì.** Ước lượng mức buồn ngủ từ 0 đến 100% trong cả hai chế độ. Ở chế độ Lái xe, mức trên 70% chỉ hiện cảnh báo; báo động an toàn vẫn do luật cố định quyết định.
 
-**Đầu vào.** Tỉ lệ thời gian nhắm mắt trong 60 giây gần nhất (PERCLOS). Mắt được coi là nhắm khi độ mở dưới 70% độ mở bình thường của chính người đó, đo trong 20 giây đầu buổi.
+**Đầu vào.** Năm đặc trưng về mắt, tính trên cửa sổ 20 và 60 giây: độ mở mắt trung bình và độ dao động so với lúc hiệu chỉnh, tỉ lệ thời gian nhắm mắt (PERCLOS), số lần nhắm mỗi phút và lần nhắm dài nhất. Mắt được coi là nhắm khi độ mở dưới 70% độ mở bình thường của chính người đó, đo trong 20 giây đầu buổi.
 
-**Mô hình.** Hồi quy logistic một biến, chuyển PERCLOS sang thang 0–1. Thứ tự xếp hạng giống hệt PERCLOS thô.
+**Mô hình.** Hồi quy logistic có chuẩn hoá, hệ số phạt C = 0,03. Mô hình được chọn theo luật đã chốt trước khi mở tập kiểm tra, xem bên dưới.
 
-**Dữ liệu huấn luyện.** UTA-RLDD fold 1–2: 24 người, 48 video tỉnh táo hoặc buồn ngủ, 28 896 cửa sổ 60 giây. Nhãn là mức tự báo của người tham gia cho cả video. Video "hơi buồn ngủ" không dùng để huấn luyện.
+**Dữ liệu huấn luyện.** Mô hình phát hành được học lại trên toàn bộ 60 người của UTA-RLDD sau khi đánh giá xong. Trong lúc chọn mô hình chỉ dùng fold 1–2: 24 người, 48 video tỉnh táo hoặc buồn ngủ, 28 896 cửa sổ 60 giây. Nhãn là mức tự báo của người tham gia cho cả video. Video "hơi buồn ngủ" không dùng.
 
 **Kết quả đánh giá chéo theo người, trên tập phát triển.**
 
@@ -21,7 +21,16 @@
 
 Chi tiết: `reports/drowsiness_dev_variants.txt`.
 
-**Đánh giá trên người chưa thấy.** Fold 3–5, gồm 36 người, được giữ kín làm tập kiểm tra một lần. Luật chọn mô hình đã được chốt trước trong `scripts/evaluate_holdout.py`. Tại thời điểm viết, Google Drive đang giới hạn lượt tải các fold này; kết quả sẽ được cập nhật vào đây.
+**Đánh giá trên người chưa thấy.** Fold 3–5 gồm 36 người, 70 video, 43 723 cửa sổ, được giữ kín và chỉ chấm một lần ngày 31/10/2026. Các mô hình học trên fold 1–2. Luật chọn đã chốt trước trong `scripts/evaluate_holdout.py`: phát hành mô hình 5 đặc trưng mắt nếu AUROC trên tập kiểm tra cao hơn PERCLOS, ngược lại phát hành PERCLOS.
+
+| Mô hình | AUROC theo cửa sổ | Khoảng tin cậy 95% | AUROC theo video | Độ chính xác cân bằng |
+| --- | --- | --- | --- | --- |
+| PERCLOS | 0,804 | 0,736–0,865 | 0,864 | 0,738 |
+| **Logistic, 5 đặc trưng mắt** | **0,809** | 0,744–0,868 | 0,881 | 0,732 |
+| Logistic, 13 đặc trưng | 0,799 | 0,739–0,865 | 0,873 | 0,725 |
+| LightGBM, 13 đặc trưng | 0,785 | 0,718–0,853 | 0,859 | 0,708 |
+
+Theo luật đã chốt, mô hình 5 đặc trưng mắt được phát hành. Cần đọc kết quả này một cách thận trọng: chênh lệch với PERCLOS chỉ 0,005 và khoảng tin cậy gần như trùng nhau, nên trên thực tế hai cách ngang nhau. Kết quả trên người chưa thấy cao hơn trên tập phát triển, có thể do tập kiểm tra lớn hơn và ít nhiễu hơn. Các đặc trưng đầu và miệng không giúp ích. Chi tiết: `reports/drowsiness_holdout.json`.
 
 **Giới hạn.**
 - Nhãn gán cho cả video 10 phút, không theo từng thời điểm, nên điểm số theo từng cửa sổ chắc chắn có nhiễu.

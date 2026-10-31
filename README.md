@@ -12,6 +12,10 @@ Phát hiện lúc người dùng mất tập trung hoặc buồn ngủ qua webca
 | Quyết định | Contextual bandit (LinUCB) chọn chờ / nhắc nhẹ / âm thanh / gợi ý nghỉ / làm tối màn hình, giới hạn ≤6 lần/giờ | Luật cố định, không qua model học |
 | Ngoại lệ | Chế độ họp, chế độ ghi chép | — |
 
+## Kết quả
+
+Phát hiện buồn ngủ, đánh giá một lần trên 36 người UTA-RLDD chưa dùng khi chọn mô hình: AUROC 0,81 theo cửa sổ 60 giây, khoảng tin cậy 95% 0,74–0,87, và 0,88 theo video. Mô hình nhiều đặc trưng không hơn PERCLOS đơn thuần một cách đáng kể. Chi tiết trong `docs/MODEL_CARD.md`.
+
 ## Cấu trúc
 
 ```
