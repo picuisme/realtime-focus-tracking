@@ -1,0 +1,46 @@
+{
+  "protocol": "Does the study-mode signal track engagement on DAiSEE?\n\nDAiSEE: 9 068 ten-second clips of 112 students watching lectures, each with an\nengagement level 0-3 from crowd annotators. Low engagement (0-1) is rare (~6 %).\nClips are too short for the 60 s window features, so each clip is summarised by\nsimple per-clip statistics, relative to the person's own median over their clips.\n\nScores compared on the official Test split (people never seen in Train/Validation):\n  rule_fraction   share of samples the shipped study rule calls distracted (no training)\n  logistic        logistic regression on the clip summaries, trained on Train + Validation",
+  "train": {
+    "clips": 7201,
+    "people": 92,
+    "low_share": 0.059852798222469104
+  },
+  "test": {
+    "clips": 1723,
+    "people": 20,
+    "low_share": 0.04933255948926291
+  },
+  "models": {
+    "rule_fraction": {
+      "auroc": 0.7206026000143646,
+      "auroc_ci95": [
+        0.617994088450588,
+        0.7932478899488777
+      ],
+      "average_precision": 0.16799763234834061,
+      "chance_average_precision": 0.04933255948926291
+    },
+    "logistic": {
+      "auroc": 0.8002513826043237,
+      "auroc_ci95": [
+        0.6964278733265865,
+        0.8665313783568155
+      ],
+      "average_precision": 0.26613066507815625,
+      "chance_average_precision": 0.04933255948926291
+    }
+  },
+  "logistic_weights": {
+    "gaze_std": 0.356,
+    "rule_fraction": 0.322,
+    "abs_yaw": 0.21,
+    "ear_std": 0.156,
+    "abs_pitch": 0.155,
+    "ear_rel": -0.101,
+    "pose_std": 0.09,
+    "closed_frac": 0.054,
+    "gaze_dev": -0.051,
+    "face_missing": 0.039,
+    "mar_mean": -0.016
+  }
+}
