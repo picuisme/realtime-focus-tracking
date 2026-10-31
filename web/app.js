@@ -161,7 +161,7 @@ async function loadPolicies() {
   try { drowsyModel = await (await fetch('./models/drowsiness.json')).json(); } catch { drowsyModel = null; }
   try { banditPrior = await (await fetch('./models/nudge_prior.json')).json(); } catch { banditPrior = null; }
   $('drowsyInfo').textContent = drowsyModel
-    ? `Logistic regression, ${drowsyModel.subjects} người trong UTA-RLDD, AUROC chéo ${drowsyModel.window_auroc_oof.toFixed(2)}`
+    ? `Logistic regression trên đặc trưng mắt, học từ ${drowsyModel.subjects} người UTA-RLDD; AUROC trên 36 người chưa thấy ${drowsyModel.window_auroc_oof.toFixed(2)}`
     : 'Chưa có model buồn ngủ, chỉ dùng PERCLOS.';
 }
 

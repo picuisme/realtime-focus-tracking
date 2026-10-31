@@ -15,14 +15,18 @@
     "face_missing60"
   ],
   "used": [
-    "perclos60"
+    "ear_rel_mean20",
+    "ear_rel_std20",
+    "perclos60",
+    "closures_per_min60",
+    "longest_closure60"
   ],
   "mean": [
-    0.0,
-    0.0,
-    0.07707324452754813,
-    0.0,
-    0.0,
+    0.930106364774576,
+    0.13375376624992477,
+    0.08479156717623758,
+    7.938329483796831,
+    1.8507415414698634,
     0.0,
     0.0,
     0.0,
@@ -33,11 +37,11 @@
     0.0
   ],
   "scale": [
-    1.0,
-    1.0,
-    0.10916280655181923,
-    1.0,
-    1.0,
+    0.1382697858907541,
+    0.08571777906590977,
+    0.14628230369260992,
+    6.868318635873639,
+    6.76253572276175,
     1.0,
     1.0,
     1.0,
@@ -48,11 +52,11 @@
     1.0
   ],
   "coef": [
-    0.0,
-    0.0,
-    1.6302735063730698,
-    0.0,
-    0.0,
+    -0.2415813795699146,
+    0.3916071615668932,
+    1.2402584398411651,
+    -0.004406261754002772,
+    3.0403899498210816,
     0.0,
     0.0,
     0.0,
@@ -62,10 +66,10 @@
     0.0,
     0.0
   ],
-  "intercept": 0.21857697469225432,
-  "model": "perclos",
-  "subjects": 24,
-  "window_auroc_oof": 0.7411849800563619,
-  "trained_on": "UTA-RLDD folds 1-2 (development set), alert vs drowsy, 60 s windows",
-  "evaluated": "provisional: cross-validated on the development set only; held-out folds 3-5 pending"
+  "intercept": 0.7284406315874828,
+  "model": "logit_eye",
+  "subjects": 60,
+  "window_auroc_oof": 0.80871929327108,
+  "trained_on": "UTA-RLDD alert vs drowsy, 60 s windows",
+  "evaluated": "held-out UTA-RLDD folds, see reports/drowsiness_holdout.json"
 }

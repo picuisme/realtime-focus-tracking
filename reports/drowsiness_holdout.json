@@ -1,0 +1,64 @@
+{
+  "protocol": "Final, one-shot evaluation of the drowsiness detector on held-out people.\n\nProtocol (fixed before the held-out folds were looked at):\n- Development set: UTA-RLDD folds 1-2 (18 people). All model choices were made\n  there with 5-fold cross-validation by person (scripts/train_drowsiness.py).\n- Held-out set: UTA-RLDD folds 3-5 (36 people), used once, here.\n- Candidates, all trained on the development set only:\n    perclos        PERCLOS-60 s alone, mapped to 0-1 by a logistic fit (same ranking as raw PERCLOS)\n    logit_eye      standardised logistic regression on the 5 eye features, C = 0.03\n    logit_all      the same on all 13 window features, C = 0.03 (shown for comparison)\n    lightgbm       gradient-boosted trees on all 13 features (comparison)\n- Decision rule: ship logit_eye only if its held-out AUROC is higher than perclos's;\n  otherwise ship perclos. The shipped model is then refit on all 54 people.",
+  "development": {
+    "subjects": 24,
+    "videos": 48,
+    "windows": 28896
+  },
+  "held_out": {
+    "subjects": 36,
+    "videos": 70,
+    "windows": 43723,
+    "folds": [
+      "Fold3",
+      "Fold4",
+      "Fold5"
+    ]
+  },
+  "models": {
+    "perclos": {
+      "window_auroc": 0.8035846120773674,
+      "window_auroc_ci95": [
+        0.7359971450938505,
+        0.8653941493925551
+      ],
+      "video_auroc": 0.8643790849673202,
+      "balanced_accuracy": 0.738272954810675,
+      "threshold_from_dev": 0.39301665909686534
+    },
+    "logit_eye": {
+      "window_auroc": 0.80871929327108,
+      "window_auroc_ci95": [
+        0.7442728433557405,
+        0.8677842932934862
+      ],
+      "video_auroc": 0.880718954248366,
+      "balanced_accuracy": 0.7315314234046932,
+      "threshold_from_dev": 0.48593130273246987
+    },
+    "logit_all": {
+      "window_auroc": 0.7990171178034737,
+      "window_auroc_ci95": [
+        0.7393058300798363,
+        0.8651273046595342
+      ],
+      "video_auroc": 0.8733660130718954,
+      "balanced_accuracy": 0.7254590632943755,
+      "threshold_from_dev": 0.5176472981519538
+    },
+    "lightgbm": {
+      "window_auroc": 0.7850390179184168,
+      "window_auroc_ci95": [
+        0.718046326744533,
+        0.8534154476203665
+      ],
+      "video_auroc": 0.8586601307189543,
+      "balanced_accuracy": 0.7082210359032665,
+      "threshold_from_dev": 0.4831768464201154
+    }
+  },
+  "decision": {
+    "rule": "ship logit_eye only if its held-out AUROC beats perclos",
+    "shipped": "logit_eye"
+  }
+}
