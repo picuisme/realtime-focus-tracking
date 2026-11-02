@@ -32,6 +32,10 @@ Chi tiết: `reports/drowsiness_dev_variants.txt`.
 
 Theo luật đã chốt, mô hình 5 đặc trưng mắt được phát hành. Cần đọc kết quả này một cách thận trọng: chênh lệch với PERCLOS chỉ 0,005 và khoảng tin cậy gần như trùng nhau, nên trên thực tế hai cách ngang nhau. Kết quả trên người chưa thấy cao hơn trên tập phát triển, có thể do tập kiểm tra lớn hơn và ít nhiễu hơn. Các đặc trưng đầu và miệng không giúp ích. Chi tiết: `reports/drowsiness_holdout.json`.
 
+**Sửa lỗi nháy mắt, 2/11/2026.** Khi dùng thử, mỗi lần nháy mắt làm mức buồn ngủ tăng vọt và mất khoảng một phút mới hạ xuống. Nguyên nhân: tín hiệu được lấy mẫu 3 lần mỗi giây, nên một cái nháy mắt bình thường đôi khi rơi đúng vào một mẫu và bị tính như một lần nhắm mắt. Từ nay, lần nhắm mắt chỉ dài một mẫu, tức dưới khoảng 0,7 giây, được coi là nháy mắt bình thường và bị bỏ qua. Trên tập phát triển, cách này không làm giảm chất lượng: AUROC 0,713 so với 0,709. Với người dùng tỉnh táo trong mô phỏng, nháy mắt 4 giây một lần trước đây đẩy mức buồn ngủ từ 25% lên 52%, nay giữ nguyên khoảng 32%.
+
+Mô hình được học lại và chấm lại trên 36 người giữ kín. Đây là lần thứ hai tập kiểm tra được dùng, nên kết quả này không còn là đánh giá được chốt trước. AUROC theo cửa sổ là 0,775, khoảng tin cậy 0,718–0,834, thấp hơn mức 0,809 của bản cũ; AUROC theo video gần như không đổi, 0,888 so với 0,881. Phần chênh lệch theo cửa sổ cho thấy bản cũ có dựa một phần vào việc nháy mắt nhiều, vốn cũng là dấu hiệu buồn ngủ thật, nhưng cái giá là báo sai liên tục với người tỉnh táo. Chi tiết: `reports/drowsiness_holdout_v2_blinkfilter.json`.
+
 **Giới hạn.**
 - Nhãn gán cho cả video 10 phút, không theo từng thời điểm, nên điểm số theo từng cửa sổ chắc chắn có nhiễu.
 - Mức chuẩn được lấy từ 20 giây đầu buổi. Người đã buồn ngủ ngay từ đầu sẽ bị đánh giá thấp hơn thực tế.
