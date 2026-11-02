@@ -171,9 +171,11 @@ class StudySession:
         pitch, yaw = f["head_pitch"] - self.calib["pitch"], f["head_yaw"] - self.calib["yaw"]
         open_ = f["ear_score"] >= T.CLOSED * self.calib["ear"]
         self.look_down_s = self.look_down_s + dt_s if (pitch > 20 and abs(yaw) < 20 and open_) else 0.0
+        face = f.get("person", 1) and f["ear_score"] > 0
+        self.closed_s = getattr(self, "closed_s", 0.0) + dt_s if (face and not open_) else 0.0
         ref = {k: self.calib[k] for k in ("ear", "pitch", "yaw")}
         frame = {"ear_score": f["ear_score"], "head_pitch": f["head_pitch"], "head_yaw": f["head_yaw"], "person": f.get("person", 1)}
-        self.reasons = [] if not self.calib["done"] else self.rules.reasons(frame, ref, 0 if self.notes else self.look_down_s, phone)
+        self.reasons = [] if not self.calib["done"] else self.rules.reasons(frame, ref, 0 if self.notes else self.look_down_s, phone, self.closed_s)
         if self.notes:
             self.reasons = [r for r in self.reasons if r != "head_down"]
         away = bool(self.reasons)

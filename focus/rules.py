@@ -14,9 +14,10 @@ class StudyRules:
     pitch_down_max: float = 30.0
     pitch_up_max: float = 25.0
     closed_ratio: float = 0.7    # EAR below 70 % of open-eye EAR = closed
+    eyes_closed_min_s: float = 1.0  # shorter closures are blinks, not distraction
     note_taking_max_s: float = 30.0
 
-    def reasons(self, s: dict, ref: dict, looking_down_s: float, phone: int) -> list[str]:
+    def reasons(self, s: dict, ref: dict, looking_down_s: float, phone: int, closed_s: float | None = None) -> list[str]:
         """s: one frame (ear_score, head_pitch, head_yaw, person). Pose already relative or raw;
         ref holds the person's neutral pose and open-eye EAR."""
         if not s.get("person", 1):
@@ -28,7 +29,8 @@ class StudyRules:
         yaw = s["head_yaw"] - ref["yaw"]
         eyes_open = s["ear_score"] >= self.closed_ratio * ref["ear"]
         note_taking = pitch > 20 and abs(yaw) < 20 and phone == 0 and eyes_open and looking_down_s < self.note_taking_max_s
-        if not eyes_open:
+        # closed_s = how long the eyes have been closed so far; None = judge this frame alone
+        if not eyes_open and (closed_s is None or closed_s >= self.eyes_closed_min_s):
             out.append("eyes_closed")
         if abs(yaw) > self.yaw_max:
             out.append("head_turned")

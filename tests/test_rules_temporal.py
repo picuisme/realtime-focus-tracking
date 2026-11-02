@@ -72,3 +72,12 @@ def test_blink_is_not_eyes_closed():
     shut = frame(ear_score=0.18)
     assert "eyes_closed" not in r.reasons(shut, REF, 0, 0, closed_s=0.3)
     assert "eyes_closed" in r.reasons(shut, REF, 0, 0, closed_s=1.2)
+
+
+def test_blink_is_not_eyes_closed():
+    from focus.rules import StudyRules
+    r = StudyRules()
+    ref = {"ear": 0.3, "pitch": 0.0, "yaw": 0.0}
+    shut = {"ear_score": 0.1, "head_pitch": 0.0, "head_yaw": 0.0, "person": 1}
+    assert r.reasons(shut, ref, 0, 0, closed_s=0.2) == []
+    assert r.reasons(shut, ref, 0, 0, closed_s=1.2) == ["eyes_closed"]

@@ -256,13 +256,14 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ── study mode ────────────────────────────────────────────────────────────
+const EYES_CLOSED_MIN_S = 1.0;
 function studyReasons(m) {
   if (!m.person) return ['absent'];
   if (m.ear <= 0) return ['no_face'];
   const pitch = m.pitch - calib.pitch, yaw = m.yaw - calib.yaw, open = m.ear >= earClosed();
   const noteTaking = (pitch > 20 && Math.abs(yaw) < 20 && S.phoneCount === 0 && open && S.lookDownS < 30) || S.notes;
   const out = [];
-  if (!open) out.push('eyes_closed');
+  if (!open && S.eyesClosedS >= EYES_CLOSED_MIN_S) out.push('eyes_closed');   // shorter = a blink
   if (Math.abs(yaw) > 40) out.push('head_turned');
   if (pitch > 30 && !noteTaking) out.push('head_down');
   if (pitch < -25) out.push('looking_up');
@@ -275,6 +276,7 @@ const REASON_TEXT = { absent: 'Không thấy người', no_face: 'Không thấy 
 function studyStep(m, dt, elapsed) {
   const pitch = m.pitch - calib.pitch, yaw = m.yaw - calib.yaw;
   S.lookDownS = (pitch > 20 && Math.abs(yaw) < 20 && m.ear >= earClosed()) ? S.lookDownS + dt : 0;
+  S.eyesClosedS = (m.ear > 0 && m.ear < earClosed()) ? (S.eyesClosedS ?? 0) + dt : 0;
   S.reasons = calib.active ? [] : studyReasons(m);
   const away = S.reasons.length > 0;
 
