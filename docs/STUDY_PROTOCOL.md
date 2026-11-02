@@ -1,5 +1,7 @@
 # Giao thức nghiên cứu người dùng
 
+> **Trạng thái:** hướng phát triển. Từ ngày 1/11/2026, phiên bản 3 không tự thu dữ liệu người dùng; chế độ Học tập được đánh giá trên bộ dữ liệu công khai PAFE (KAIST). Giao thức này được giữ nguyên để có thể tiến hành sau.
+
 **Câu hỏi:** so với không nhắc (A) và nhắc theo luật v2.1 (B), nhắc bằng bandit (C) có giúp người học quay lại tập trung nhanh hơn mà không bị làm phiền hơn không?
 
 ## Giả thuyết (chốt trước khi thu dữ liệu)
