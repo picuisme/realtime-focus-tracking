@@ -71,7 +71,7 @@ function newSession() {
     focusS: 0, awayS: 0, drowsy: null, drowsyHist: [],
     budget: new C.NudgeBudget({ perHour: LEVELS[settings.level].perHour }),
     nextDecisionAt: LEVELS[settings.level].firstS, pending: [], nudgeTimes: [],
-    nSamples: 0, backSince: null, lastReturnT: null, hiddenS: 0,
+    nSamples: 0, backSince: null, lastReturnT: null, hiddenS: 0, fps: 0, fpsSum: 0, fpsN: 0,
     selfLabel: 0, meeting: false, notes: false, phoneCount: 0, phoneBoxes: [], objPerson: 0, lastObjT: 0,
     // driver
     closedS: 0, offRoadS: 0, phoneS: 0, perclos: [], yawnOpenS: 0, yawns: [], lastAlarmT: 0, level: 'ok',
@@ -243,6 +243,7 @@ function loop() {
   }
 
   if (document.hidden) S.hiddenS += dt;
+  else if (dt > 0) { S.fps = S.fps ? 0.9 * S.fps + 0.1 / dt : 1 / dt; S.fpsSum += 1 / dt; S.fpsN++; }
   drawOverlay(lm);
   if (mode === 'study') studyStep(m, dt, elapsed); else driverStep(m, dt, now);
   schedule();
@@ -352,6 +353,7 @@ function renderCommon(m) {
   $('mMar').textContent = fmt(m.mar, 2);
   $('mGaze').textContent = fmt(m.gaze, 2);
   $('mPhone').textContent = S.phoneCount ? 'Có' : 'Không';
+  $('mFps').textContent = S.fps ? S.fps.toFixed(0) : '–';
   $('elapsed').textContent = mmss((performance.now() - S.t0) / 1000);
   const dz = S.drowsy;
   $('drowsyVal').textContent = dz == null ? 'đang đo…' : `${Math.round(dz * 100)}%`;
@@ -433,6 +435,7 @@ function summary() {
     useful_nudge_rate: nudges.length ? +(nudges.filter(d => d.refocused).length / nudges.length).toFixed(3) : null,
     not_helpful: nudges.filter(d => d.notHelpful).length,
     hidden_minutes: +(S.hiddenS / 60).toFixed(2),
+    mean_fps: S.fpsN ? +(S.fpsSum / S.fpsN).toFixed(1) : null,
     mean_drowsiness: S.drowsyHist.length ? +(S.drowsyHist.reduce((a, b) => a + b, 0) / S.drowsyHist.length).toFixed(3) : null,
     self_rated_focus: $('qFocus').value ? Number($('qFocus').value) : null,
     self_rated_annoyance: $('qAnnoy').value ? Number($('qAnnoy').value) : null,
