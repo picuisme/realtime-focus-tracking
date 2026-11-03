@@ -36,3 +36,5 @@ The rule already finds most uncovered yawns. Almost half of DMD yawns are made
 behind a hand, which no mouth-opening signal can see, rule or TD. Closing that gap
 needs a different input (for example, a hand held over the mouth), which cannot be
 validated now because the DMD videos are no longer available.
+
+Decision: the app keeps the rule and counts a yawn after 0.8 s of wide-open mouth instead of 1.2 s (recall 0.45 to 0.49 on DMD, median delay 2.0 s to 1.6 s, no added false alarms).
