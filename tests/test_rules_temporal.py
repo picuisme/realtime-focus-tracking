@@ -49,7 +49,27 @@ def test_window_features_shape_and_no_label_inputs():
 
 
 def test_perclos_counts_closed_fraction():
-    buf = [{"ear_score": 0.3 if i % 4 else 0.1, "mar_score": 0.0, "head_pitch": 0.0, "head_yaw": 0.0,
+    # closures of 2 samples (~0.7 s) every 8 samples
+    buf = [{"ear_score": 0.1 if i % 8 < 2 else 0.3, "mar_score": 0.0, "head_pitch": 0.0, "head_yaw": 0.0,
             "gaze_ratio": 0.5} for i in range(180)]
     f = dict(zip(FEATURES, window_features(buf, REF)))
-    assert abs(f["perclos60"] - 0.25) < 1e-9 and f["closures_per_min60"] == 45
+    assert abs(f["perclos60"] - 46 / 180) < 1e-9 and f["closures_per_min60"] == 23
+
+
+def test_single_sample_blinks_are_ignored():
+    """A normal blink caught by one 3 Hz sample must not move any eye feature."""
+    open_ = {"ear_score": 0.3, "mar_score": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "gaze_ratio": 0.5}
+    base = [dict(open_) for _ in range(180)]
+    blinks = [dict(open_, ear_score=0.1) if i % 12 == 5 else dict(open_) for i in range(180)]
+    fa = dict(zip(FEATURES, window_features(base, REF)))
+    fb = dict(zip(FEATURES, window_features(blinks, REF)))
+    for k in ["ear_rel_mean20", "ear_rel_std20", "perclos60", "closures_per_min60", "longest_closure60"]:
+        assert abs(fa[k] - fb[k]) < 1e-9, k
+
+
+def test_blink_is_not_eyes_closed():
+    r = StudyRules()
+    shut = frame(ear_score=0.18)
+    assert "eyes_closed" not in r.reasons(shut, REF, 0, 0, closed_s=0.3)
+    assert "eyes_closed" in r.reasons(shut, REF, 0, 0, closed_s=1.2)
+

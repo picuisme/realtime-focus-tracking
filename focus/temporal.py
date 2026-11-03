@@ -22,6 +22,7 @@ W_LONG = 180      # 60 s
 REF_SAMPLES = 60  # first 20 s of the session
 CLOSED = 0.7      # eye counts as closed below 70 % of the person's open-eye EAR
 YAWN_MAR = 0.5
+MIN_CLOSED_RUN = 2  # a closed run shorter than this (< ~0.7 s at 3 Hz) is a normal blink and is ignored
 
 FEATURES = [
     "ear_rel_mean20", "ear_rel_std20", "perclos60", "closures_per_min60",
@@ -50,6 +51,24 @@ def _std(a):
     return math.sqrt(_mean([(v - m) ** 2 for v in a]))
 
 
+def _short_runs(flags: Sequence[int], min_len: int) -> list[bool]:
+    """Mark samples that belong to a run of 1s shorter than min_len."""
+    out = [False] * len(flags)
+    i = 0
+    while i < len(flags):
+        if flags[i]:
+            j = i
+            while j < len(flags) and flags[j]:
+                j += 1
+            if j - i < min_len:
+                for t in range(i, j):
+                    out[t] = True
+            i = j
+        else:
+            i += 1
+    return out
+
+
 def window_features(buf: Sequence[dict], ref: dict) -> list[float]:
     """buf = the most recent samples (oldest first), each with ear_score,
     mar_score, head_pitch, head_yaw, gaze_ratio. ear_score == 0 means no face."""
@@ -59,8 +78,11 @@ def window_features(buf: Sequence[dict], ref: dict) -> list[float]:
     sf = [s for s in short if s["ear_score"] > 0]
 
     ear_rel_l = [s["ear_score"] / ref["ear"] for s in lf]
-    ear_rel_s = [s["ear_score"] / ref["ear"] for s in sf]
-    closed = [1 if e < CLOSED else 0 for e in ear_rel_l]
+    raw_closed = [1 if e < CLOSED else 0 for e in ear_rel_l]
+    blink = _short_runs(raw_closed, MIN_CLOSED_RUN)
+    closed = [c and not b for c, b in zip(raw_closed, blink)]
+    k = len(sf)
+    ear_rel_s = [e for e, b in zip(ear_rel_l[len(lf) - k:], blink[len(lf) - k:]) if not b] if k else []
 
     closures = 0
     longest = run = 0

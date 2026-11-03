@@ -69,11 +69,28 @@ export function reference(samples) {
   return { ear: Math.max(median(face.map(s => s.ear_score)), 1e-3), pitch: median(face.map(s => s.head_pitch)), yaw: median(face.map(s => s.head_yaw)) };
 }
 
+// a closed run shorter than this (< ~0.7 s at 3 Hz) is a normal blink and is ignored
+export const MIN_CLOSED_RUN = 2;
+function shortRuns(flags, minLen) {
+  const out = flags.map(() => false);
+  for (let i = 0; i < flags.length;) {
+    if (!flags[i]) { i++; continue; }
+    let j = i; while (j < flags.length && flags[j]) j++;
+    if (j - i < minLen) for (let t = i; t < j; t++) out[t] = true;
+    i = j;
+  }
+  return out;
+}
+
 export function windowFeatures(buf, ref) {
   const long = buf.slice(-W_LONG), short = long.slice(-W_SHORT);
   const lf = long.filter(s => s.ear_score > 0), sf = short.filter(s => s.ear_score > 0);
-  const earL = lf.map(s => s.ear_score / ref.ear), earS = sf.map(s => s.ear_score / ref.ear);
-  const closed = earL.map(e => (e < CLOSED ? 1 : 0));
+  const earL = lf.map(s => s.ear_score / ref.ear);
+  const rawClosed = earL.map(e => (e < CLOSED ? 1 : 0));
+  const blink = shortRuns(rawClosed, MIN_CLOSED_RUN);
+  const closed = rawClosed.map((c, i) => (c && !blink[i] ? 1 : 0));
+  const k = sf.length, off = lf.length - k;
+  const earS = k ? earL.slice(off).filter((_, i) => !blink[off + i]) : [];
   let closures = 0, longest = 0, run = 0;
   closed.forEach((c, i) => {
     if (c && (i === 0 || !closed[i - 1])) closures++;

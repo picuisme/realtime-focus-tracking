@@ -2,12 +2,13 @@
 // Study mode: calibrated rules detect "away", a drowsiness model scores fatigue,
 // and a nudge policy (none / v2.1 rule / LinUCB bandit) decides what to do.
 // Driver mode: deterministic alarms only.
-import { FaceLandmarker, ObjectDetector, FilesetResolver }
+import { FaceLandmarker, HandLandmarker, ObjectDetector, FilesetResolver }
   from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 import * as C from './core.js';
 
 const WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const OBJ_MODEL = 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite';
 
 const $ = id => document.getElementById(id);
@@ -17,7 +18,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
 
-let face, objects, drowsyModel = null, banditPrior = null, stream;
+let face, hands, objects, drowsyModel = null, banditPrior = null, stream;
 let mode = 'study', running = false;
 
 // ── settings ──────────────────────────────────────────────────────────────
@@ -152,6 +153,12 @@ async function loadModels() {
   face = await withFallback(delegate => FaceLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: FACE_MODEL, delegate }, runningMode: 'VIDEO', numFaces: 1, outputFacialTransformationMatrixes: true,
   }));
+  setLoading('Đang tải bộ phát hiện bàn tay…');
+  try {
+    hands = await withFallback(delegate => HandLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: HAND_MODEL, delegate }, runningMode: 'VIDEO', numHands: 2,
+    }));
+  } catch (e) { console.warn('hand model unavailable', e); hands = null; }
   setLoading('Đang tải bộ phát hiện điện thoại…');
   objects = await withFallback(delegate => ObjectDetector.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: OBJ_MODEL, delegate }, runningMode: 'VIDEO', scoreThreshold: 0.45, maxResults: 5,
@@ -201,6 +208,16 @@ function stop() {
   if (S && mode === 'study') showSummary();
 }
 
+// true when at least 3 hand landmarks fall inside the (padded) box around both eyes
+const EYE_IDX = [33, 133, 159, 145, 362, 263, 386, 374];
+function eyesCovered(lm, pts) {
+  if (!pts.length) return false;
+  const xs = EYE_IDX.map(i => lm[i].x), ys = EYE_IDX.map(i => lm[i].y);
+  const w = Math.max(...xs) - Math.min(...xs), pad = 0.25 * w;
+  const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+  return pts.filter(q => q.x > x0 && q.x < x1 && q.y > y0 && q.y < y1).length >= 3;
+}
+
 // ── main loop ─────────────────────────────────────────────────────────────
 function loop() {
   if (!running) return;
@@ -218,11 +235,19 @@ function loop() {
     S.objPerson = det.some(d => cat(d) === 'person') ? 1 : 0;
   } else if (!settings.phone) { S.phoneCount = 0; S.phoneBoxes = []; }
 
+  // a hand over the eyes makes the face model guess open eyes, so check for it (5 times a second)
+  if (hands && now - (S.lastHandT ?? 0) > 200) {
+    S.lastHandT = now;
+    S.handPts = (hands.detectForVideo(video, now).landmarks || []).flat();
+  }
+
+  S.eyesCovered = false;
   let m = { pitch: 0, yaw: 0, roll: 0, ear: 0, mar: 0, brow: 0, gaze: 0.5, person: S.objPerson };
   const lm = res.faceLandmarks?.[0];
   if (lm) {
     const pose = C.poseFromMatrix(res.facialTransformationMatrixes[0].data, settings.invertPitch);
     const l43 = C.to43(lm, video.videoWidth, video.videoHeight);
+    S.eyesCovered = eyesCovered(lm, S.handPts || []);
     m = { ...pose, ear: C.ear(l43), mar: C.mar(l43), brow: C.browDist(l43), gaze: C.gazeRatio(l43), person: 1 };
     if (calib.active) calib.samples.push({ pitch: m.pitch, yaw: m.yaw, ear: m.ear });
   }
@@ -256,25 +281,29 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ── study mode ────────────────────────────────────────────────────────────
+const EYES_CLOSED_MIN_S = 1.0;
 function studyReasons(m) {
   if (!m.person) return ['absent'];
   if (m.ear <= 0) return ['no_face'];
   const pitch = m.pitch - calib.pitch, yaw = m.yaw - calib.yaw, open = m.ear >= earClosed();
   const noteTaking = (pitch > 20 && Math.abs(yaw) < 20 && S.phoneCount === 0 && open && S.lookDownS < 30) || S.notes;
   const out = [];
-  if (!open) out.push('eyes_closed');
+  if (!open && S.eyesClosedS >= EYES_CLOSED_MIN_S) out.push('eyes_closed');   // shorter = a blink
+  if (S.coveredS >= EYES_CLOSED_MIN_S) out.push('eyes_covered');
   if (Math.abs(yaw) > 40) out.push('head_turned');
   if (pitch > 30 && !noteTaking) out.push('head_down');
   if (pitch < -25) out.push('looking_up');
   if (S.phoneCount > 0) out.push('phone');
   return out;
 }
-const REASON_TEXT = { absent: 'Không thấy người', no_face: 'Không thấy khuôn mặt', eyes_closed: 'Mắt nhắm', head_turned: 'Quay đầu sang bên',
+const REASON_TEXT = { absent: 'Không thấy người', no_face: 'Không thấy khuôn mặt', eyes_closed: 'Mắt nhắm', eyes_covered: 'Tay che mắt', head_turned: 'Quay đầu sang bên',
   head_down: 'Cúi đầu quá lâu', looking_up: 'Nhìn lên', phone: 'Có điện thoại' };
 
 function studyStep(m, dt, elapsed) {
   const pitch = m.pitch - calib.pitch, yaw = m.yaw - calib.yaw;
   S.lookDownS = (pitch > 20 && Math.abs(yaw) < 20 && m.ear >= earClosed()) ? S.lookDownS + dt : 0;
+  S.eyesClosedS = (m.ear > 0 && m.ear < earClosed()) ? (S.eyesClosedS ?? 0) + dt : 0;
+  S.coveredS = m.person && S.eyesCovered ? (S.coveredS ?? 0) + dt : 0;
   S.reasons = calib.active ? [] : studyReasons(m);
   const away = S.reasons.length > 0;
 
@@ -301,7 +330,8 @@ function studyStep(m, dt, elapsed) {
 // ── driver mode: deterministic alarms ─────────────────────────────────────
 function driverStep(m, dt, now) {
   const D = C.DRIVER, t = now / 1000, faceSeen = m.ear > 0;
-  const closed = faceSeen && m.ear < earClosed();
+  const covered = faceSeen && S.eyesCovered;   // eyes hidden by a hand count as closed
+  const closed = faceSeen && (m.ear < earClosed() || covered);
   S.closedS = closed ? S.closedS + dt : 0;
   S.perclos.push([t, closed ? 1 : 0]);
   while (S.perclos.length && S.perclos[0][0] < t - 60) S.perclos.shift();
@@ -311,17 +341,20 @@ function driverStep(m, dt, now) {
   const offRoad = !faceSeen || Math.abs(yaw) > 30 || pitch > 25 || pitch < -20;
   S.offRoadS = offRoad && !closed ? S.offRoadS + dt : 0;
   S.phoneS = S.phoneCount > 0 ? S.phoneS + dt : 0;
-  if (m.mar > C.YAWN_MAR) S.yawnOpenS += dt; else { if (S.yawnOpenS >= 1.2) S.yawns.push(t); S.yawnOpenS = 0; }
+  // a yawn counts as soon as the mouth has been wide open for 1.2 s, not when it closes
+  if (m.mar > C.YAWN_MAR) { S.yawnOpenS += dt; if (S.yawnOpenS >= 1.2 && !S.yawnCounted) { S.yawns.push(t); S.yawnCounted = true; } }
+  else { S.yawnOpenS = 0; S.yawnCounted = false; }
   S.yawns = S.yawns.filter(y => y > t - 300);
 
   let level = 'ok', msg = 'Tỉnh táo, mắt hướng về phía trước';
+  if (S.yawnCounted) msg = `Đang ngáp · lần ${S.yawns.length} trong 5 phút (cảnh báo từ lần ${D.yawnWarnCount})`;
   if (S.yawns.length >= D.yawnWarnCount) { level = 'warn'; msg = `Ngáp ${S.yawns.length} lần trong 5 phút. Cân nhắc dừng nghỉ.`; }
   if (S.drowsy != null && S.drowsy > D.drowsyWarn) { level = 'warn'; msg = `Model đánh giá buồn ngủ ${(S.drowsy * 100).toFixed(0)}%`; }
   if (coverage > 0.5 && perclos > D.perclosWarn) { level = 'warn'; msg = `Dấu hiệu buồn ngủ (PERCLOS ${(perclos * 100).toFixed(0)}%)`; }
   if (coverage > 0.5 && perclos > D.perclosAlarm) { level = 'alarm'; msg = 'Buồn ngủ nặng. Hãy dừng xe ở nơi an toàn.'; }
   if (S.offRoadS > D.offRoadS) { level = 'alarm'; msg = faceSeen ? 'Mắt rời khỏi mặt đường!' : 'Không thấy khuôn mặt tài xế!'; }
   if (S.phoneS > D.phoneS) { level = 'alarm'; msg = 'Đang dùng điện thoại khi lái!'; }
-  if (S.closedS > D.microsleepS) { level = 'alarm'; msg = 'NGỦ GẬT! Mở mắt ra!'; }
+  if (S.closedS > D.microsleepS) { level = 'alarm'; msg = covered ? 'Không thấy mắt tài xế!' : 'NGỦ GẬT! Mở mắt ra!'; }
   if (calib.active) { level = 'ok'; msg = 'Đang hiệu chỉnh…'; }
   if (level === 'alarm' && t - S.lastAlarmT > 0.6) { S.lastAlarmT = t; beep(880, 0.25, 0.25); }
   if (S.timeline.length === 0 || t - S.timeline.at(-1).t >= 1) S.timeline.push({ t, away: level === 'ok' ? 0 : 1 });
