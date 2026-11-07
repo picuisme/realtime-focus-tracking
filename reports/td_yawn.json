@@ -1,0 +1,31 @@
+{
+  "protocol": "Label-free yawn detector by TD value prediction, for the web app.\n\nTrain (no labels): UTA-RLDD, 60 people, 3 Hz. The cumulant is the app's own rule\nsignal \"mouth wide open\" (MAR > 0.5 with a face), so the value V(s) is the\ndiscounted amount of wide-open mouth expected in the next ~2 s.\n\nThreshold (no labels): chosen on UTA-RLDD so that the TD detector raises as many\nyawn alerts per hour as the current rule (mouth open >= 1.2 s) does there.\n\nTest (labels, never used for training or the threshold): DMD drowsiness\nrecordings, 13 people, yawns annotated per frame, down-sampled to 3 Hz like the\napp. Compares the current rule, the TD detector as shipped, and the TD detector\nthat keeps learning on each recording with TD(lambda) (what the app does).",
+  "train": {
+    "dataset": "UTA-RLDD",
+    "sessions": 182,
+    "hours": 31.6
+  },
+  "threshold": 0.10758402889828488,
+  "rule_alerts_per_hour_uta": 2.7254160895795674,
+  "td_alerts_per_hour_uta": 2.7254160895795674,
+  "test_dmd_yawn": {
+    "rule": {
+      "events": 76,
+      "recall": 0.4605263157894737,
+      "median_latency_s": 2.0,
+      "false_alarms_per_h": 0.0
+    },
+    "td": {
+      "events": 76,
+      "recall": 0.3026315789473684,
+      "median_latency_s": 1.3333333333333333,
+      "false_alarms_per_h": 0.0
+    },
+    "td_online": {
+      "events": 76,
+      "recall": 0.8421052631578947,
+      "median_latency_s": 0.6666666666666666,
+      "false_alarms_per_h": 48.4453053318381
+    }
+  }
+}

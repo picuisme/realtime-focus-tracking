@@ -341,8 +341,8 @@ function driverStep(m, dt, now) {
   const offRoad = !faceSeen || Math.abs(yaw) > 30 || pitch > 25 || pitch < -20;
   S.offRoadS = offRoad && !closed ? S.offRoadS + dt : 0;
   S.phoneS = S.phoneCount > 0 ? S.phoneS + dt : 0;
-  // a yawn counts as soon as the mouth has been wide open for 1.2 s, not when it closes
-  if (m.mar > C.YAWN_MAR) { S.yawnOpenS += dt; if (S.yawnOpenS >= 1.2 && !S.yawnCounted) { S.yawns.push(t); S.yawnCounted = true; } }
+  // a yawn counts as soon as the mouth has been wide open for D.yawnOpenS (0.8 s; see reports/td_yawn_notes.md)
+  if (m.mar > C.YAWN_MAR) { S.yawnOpenS += dt; if (S.yawnOpenS >= D.yawnOpenS && !S.yawnCounted) { S.yawns.push(t); S.yawnCounted = true; } }
   else { S.yawnOpenS = 0; S.yawnCounted = false; }
   S.yawns = S.yawns.filter(y => y > t - 300);
 

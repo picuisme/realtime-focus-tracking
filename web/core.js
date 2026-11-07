@@ -183,7 +183,7 @@ export class NudgeBudget {
 export const ruleV21 = distractedS => (distractedS >= 90 ? 'sound' : distractedS >= 9 ? 'toast' : 'wait');
 
 // ── driver alarms (focus/rules.py DriverRules) ───────────────────────────
-export const DRIVER = { microsleepS: 1.5, offRoadS: 2, phoneS: 1, perclosWarn: 0.15, perclosAlarm: 0.3, yawnWarnCount: 3, drowsyWarn: 0.7 };
+export const DRIVER = { microsleepS: 1.5, offRoadS: 2, phoneS: 1, perclosWarn: 0.15, perclosAlarm: 0.3, yawnWarnCount: 3, yawnOpenS: 0.8, drowsyWarn: 0.7 };
 
 // ── study-session pieces shared with focus/session.py (tested for parity) ──
 export const REFOCUS_S = 10, TOAST_S = 8;
